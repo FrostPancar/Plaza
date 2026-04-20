@@ -7,6 +7,9 @@ const PORT = Number(process.env.PORT || process.env.MULTIPLAYER_PORT || 8787);
 const HOST = process.env.MULTIPLAYER_HOST || "0.0.0.0";
 const ROOT_DIR = process.cwd();
 const WORLD_STATE_PATH = resolve(process.env.WORLD_STATE_PATH || "server/world-state.json");
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
+const SUPABASE_WORLD_ROW_ID = "global";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -34,7 +37,7 @@ const sockets = new Map();
 let playersDirty = false;
 let persistTimer = null;
 
-loadPersistedWorld();
+const worldLoadPromise = loadPersistedWorld();
 
 const server = createServer((req, res) => {
   const rawUrl = String(req.url || "/");
@@ -118,8 +121,10 @@ setInterval(() => {
   broadcastPlayers();
 }, Math.round(1000 / 15));
 
-server.listen(PORT, HOST, () => {
-  console.log(`[render] serving on http://${HOST}:${PORT}`);
+void worldLoadPromise.finally(() => {
+  server.listen(PORT, HOST, () => {
+    console.log(`[render] serving on http://${HOST}:${PORT}`);
+  });
 });
 
 function handleMessage(clientId, message) {
@@ -320,7 +325,9 @@ function finite(value, fallback) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function loadPersistedWorld() {
+async function loadPersistedWorld() {
+  const loadedFromSupabase = await loadWorldFromSupabase();
+  if (loadedFromSupabase) return;
   if (!existsSync(WORLD_STATE_PATH)) return;
   try {
     const raw = readFileSync(WORLD_STATE_PATH, "utf8");
@@ -337,13 +344,14 @@ function loadPersistedWorld() {
 
 function schedulePersistWorld() {
   if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
+  persistTimer = setTimeout(async () => {
     persistTimer = null;
-    persistWorld();
+    await persistWorld();
   }, 200);
 }
 
-function persistWorld() {
+async function persistWorld() {
+  if (await persistWorldToSupabase()) return;
   try {
     mkdirSync(dirname(WORLD_STATE_PATH), { recursive: true });
     writeFileSync(
@@ -365,14 +373,76 @@ function persistWorld() {
 }
 
 process.on("SIGINT", () => {
-  persistWorld();
-  process.exit(0);
+  void persistWorld().finally(() => process.exit(0));
 });
 
 process.on("SIGTERM", () => {
-  persistWorld();
-  process.exit(0);
+  void persistWorld().finally(() => process.exit(0));
 });
+
+async function loadWorldFromSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return false;
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/world_state?id=eq.${encodeURIComponent(SUPABASE_WORLD_ROW_ID)}&select=pins,pins_revision,updated_at`;
+    const response = await fetch(url, {
+      headers: supabaseHeaders(),
+    });
+    if (!response.ok) {
+      console.warn("[render] failed to load world from Supabase:", response.status, await response.text());
+      return false;
+    }
+    const rows = await response.json();
+    const row = Array.isArray(rows) ? rows[0] : null;
+    if (!row) return false;
+    const loadedPins = sanitizePins(row.pins || []);
+    world.pins = loadedPins;
+    world.pinsRevision = Number.isFinite(Number(row.pins_revision)) ? Number(row.pins_revision) : loadedPins.length ? 1 : 0;
+    world.updatedAt = Number.isFinite(Number(row.updated_at)) ? Number(row.updated_at) : Date.now();
+    console.log(`[render] loaded ${loadedPins.length} pins from Supabase`);
+    return true;
+  } catch (error) {
+    console.warn("[render] failed to load world from Supabase:", error?.message || error);
+    return false;
+  }
+}
+
+async function persistWorldToSupabase() {
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return false;
+  try {
+    const url = `${SUPABASE_URL}/rest/v1/world_state?on_conflict=id`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        ...supabaseHeaders(),
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=minimal",
+      },
+      body: JSON.stringify([
+        {
+          id: SUPABASE_WORLD_ROW_ID,
+          pins: world.pins,
+          pins_revision: world.pinsRevision,
+          updated_at: world.updatedAt,
+        },
+      ]),
+    });
+    if (!response.ok) {
+      console.warn("[render] failed to persist world to Supabase:", response.status, await response.text());
+      return false;
+    }
+    return true;
+  } catch (error) {
+    console.warn("[render] failed to persist world to Supabase:", error?.message || error);
+    return false;
+  }
+}
+
+function supabaseHeaders() {
+  return {
+    apikey: SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+  };
+}
 
 function safePath(urlPath) {
   const normalized = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
