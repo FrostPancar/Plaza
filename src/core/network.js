@@ -161,9 +161,30 @@ function inferWsUrl() {
   const params = new URLSearchParams(window.location.search);
   const explicit = params.get("ws");
   if (explicit) return explicit;
+
   const { protocol, hostname } = window.location;
-  if (protocol === "https:") return `wss://${hostname}/ws`;
-  return `ws://${hostname}:8787`;
+  const host = String(hostname || "").toLowerCase();
+  const isLocalDev = host === "localhost" || host === "127.0.0.1" || host === "::1";
+  const persisted = safeLocalStorageGet("plaza.wsUrl");
+
+  // Let local/dev environments use persisted custom WS endpoints for debugging.
+  if (isLocalDev && persisted) return persisted;
+
+  if (protocol === "https:") {
+    // Force a single authoritative production world endpoint so all clients (desktop/mobile) join the same instance.
+    return "wss://plaza.onrender.com/ws";
+  }
+  return `ws://${host || "127.0.0.1"}:8787`;
+}
+
+function safeLocalStorageGet(key) {
+  try {
+    const value = localStorage.getItem(key);
+    if (!value || typeof value !== "string") return "";
+    return value.trim();
+  } catch {
+    return "";
+  }
 }
 
 function sanitizeRemoteState(raw) {
