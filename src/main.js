@@ -452,15 +452,6 @@ renderer.domElement.addEventListener("mousedown", (event) => {
     if (inMaskSelection) return;
     event.preventDefault();
     const pointer = getMouseInteractionPointer(event);
-    if (inventoryItem) {
-      const placed = placeInventoryAtPointer(pointer.x, pointer.y);
-      if (placed) return;
-      showToast("No valid place point.");
-    } else {
-      const picked = pickupInventoryAtPointer(pointer.x, pointer.y);
-      if (picked) return;
-      showToast("Right-click your uploaded item to store it.");
-    }
     const started = uploadPins.beginDecorateControlAtPointer(pointer.x, pointer.y, renderer.domElement);
     if (started) {
       actionMenu.close();
@@ -470,6 +461,16 @@ renderer.domElement.addEventListener("mousedown", (event) => {
       input.exitPointerLock();
       triedInitialPointerLock = false;
       showToast("Decorate: WASD move, R rotate, Arrows resize, Delete remove, Enter place.");
+      return;
+    }
+    if (inventoryItem) {
+      const placed = placeInventoryAtPointer(pointer.x, pointer.y);
+      if (placed) return;
+      showToast("No valid place point.");
+    } else {
+      const picked = pickupInventoryAtPointer(pointer.x, pointer.y);
+      if (picked) return;
+      showToast("Right-click your uploaded item to store it.");
     }
     return;
   }

@@ -2175,7 +2175,7 @@ export function createUploadPinManager({
     const pin = getPinAtPointer(clientX, clientY, domElement);
     if (!pin) return null;
     if (!pin.inRadius) return null;
-    if (pin.fileType === "graffiti") return null;
+    if (pin.fileType === "graffiti" || pin.fileType === "decorate") return null;
     if (!canRequesterControlOwner(pin.ownerId, requesterOwnerId)) return null;
 
     const stored = pinToSerializable(pin);
@@ -2188,7 +2188,7 @@ export function createUploadPinManager({
     const pin = getPinAtPointer(clientX, clientY, domElement);
     if (!pin) return false;
     if (!pin.inRadius) return false;
-    if (pin.fileType === "graffiti") return false;
+    if (pin.fileType === "graffiti" || pin.fileType === "decorate") return false;
     if (!canRequesterControlOwner(pin.ownerId, requesterOwnerId)) return false;
     return true;
   }
