@@ -35,6 +35,7 @@ const AUTO_QUALITY_COOLDOWN_SECONDS = 2.5;
 const AUTO_QUALITY_DOWN_FPS = 48;
 const AUTO_QUALITY_UP_FPS = 57;
 const AUTO_QUALITY_SCALES = [1, 0.88, 0.76, 0.64];
+const TRUSTED_DEVICE_KEY = "plaza.trustedDevice.v1";
 
 const root = document.getElementById("game-root");
 const uiRoot = document.getElementById("ui-root");
@@ -96,14 +97,35 @@ let lastSentMaskId = null;
 
 const input = createInput();
 input.bind(renderer.domElement);
+const hostname = String(window.location.hostname || "").toLowerCase();
+const isLocalhostHost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+const trustedFromStorage = safeLocalStorageGet(TRUSTED_DEVICE_KEY) === "1";
+const urlParams = new URLSearchParams(window.location.search);
+const trustDeviceParam = urlParams.get("trustDevice");
+let trustedDevice = isLocalhostHost || trustedFromStorage;
+if (trustDeviceParam === "1") {
+  trustedDevice = true;
+  safeLocalStorageSet(TRUSTED_DEVICE_KEY, "1");
+} else if (trustDeviceParam === "0") {
+  trustedDevice = false;
+  safeLocalStorageSet(TRUSTED_DEVICE_KEY, "0");
+}
 const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0;
 const hasLikelyHardwareKeyboard = window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches ?? true;
 const useTouchControls = isTouchDevice && !hasLikelyHardwareKeyboard;
 
 let uploadPins;
 const overlay = createFileOverlayUI(uiRoot, {
-  canDelete: (pin) => Boolean(networkClient.clientId && pin?.ownerId && pin.ownerId === networkClient.clientId),
+  canDelete: (pin) =>
+    trustedDevice || Boolean(networkClient.clientId && pin?.ownerId && pin.ownerId === networkClient.clientId),
   onDelete: (pin) => {
+    if (trustedDevice) {
+      const privilegedOwnerId = String(pin?.ownerId || networkClient.clientId || "");
+      const didDelete = uploadPins?.deletePin(pin.id, privilegedOwnerId);
+      if (didDelete) showToast("Pin deleted.");
+      else showToast("Could not delete pin.");
+      return;
+    }
     const ownerId = networkClient.clientId || "";
     if (!ownerId || !pin?.ownerId || pin.ownerId !== ownerId) {
       showToast("Only the uploader can delete this item.");
@@ -939,6 +961,24 @@ function getPlayerLabelFromId(id) {
   const safe = String(id || "");
   if (!safe) return "Unknown";
   return `Player ${safe.slice(-4).toUpperCase()}`;
+}
+
+function safeLocalStorageGet(key) {
+  try {
+    const value = localStorage.getItem(key);
+    if (!value || typeof value !== "string") return "";
+    return value.trim();
+  } catch {
+    return "";
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  try {
+    localStorage.setItem(key, String(value ?? ""));
+  } catch {
+    // Ignore storage write failures in restricted contexts.
+  }
 }
 
 function syncInventorySlot() {

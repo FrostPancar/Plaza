@@ -1,11 +1,12 @@
 import { createServer } from "http";
 import { WebSocketServer } from "ws";
-import { createReadStream, existsSync, statSync } from "fs";
-import { extname, join, normalize } from "path";
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import { dirname, extname, join, normalize, resolve } from "path";
 
 const PORT = Number(process.env.PORT || process.env.MULTIPLAYER_PORT || 8787);
 const HOST = process.env.MULTIPLAYER_HOST || "0.0.0.0";
 const ROOT_DIR = process.cwd();
+const WORLD_STATE_PATH = resolve(process.env.WORLD_STATE_PATH || "server/world-state.json");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -31,6 +32,9 @@ const world = {
 
 const sockets = new Map();
 let playersDirty = false;
+let persistTimer = null;
+
+loadPersistedWorld();
 
 const server = createServer((req, res) => {
   const rawUrl = String(req.url || "/");
@@ -125,6 +129,7 @@ function handleMessage(clientId, message) {
     if ((!Array.isArray(world.pins) || world.pins.length === 0) && Array.isArray(payload.pins) && payload.pins.length > 0) {
       world.pins = sanitizePins(payload.pins, clientId);
       world.pinsRevision += 1;
+      schedulePersistWorld();
     }
     world.updatedAt = Date.now();
     playersDirty = true;
@@ -145,6 +150,7 @@ function handleMessage(clientId, message) {
     world.pins = reconcilePins(world.pins, nextPins, clientId);
     world.pinsRevision += 1;
     world.updatedAt = Date.now();
+    schedulePersistWorld();
     broadcastPins();
   }
 }
@@ -313,6 +319,60 @@ function finite(value, fallback) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
 }
+
+function loadPersistedWorld() {
+  if (!existsSync(WORLD_STATE_PATH)) return;
+  try {
+    const raw = readFileSync(WORLD_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const loadedPins = sanitizePins(parsed?.pins || []);
+    world.pins = loadedPins;
+    world.pinsRevision = Number.isFinite(Number(parsed?.pinsRevision)) ? Number(parsed.pinsRevision) : loadedPins.length ? 1 : 0;
+    world.updatedAt = Number.isFinite(Number(parsed?.updatedAt)) ? Number(parsed.updatedAt) : Date.now();
+    console.log(`[render] loaded ${loadedPins.length} pins from ${WORLD_STATE_PATH}`);
+  } catch (error) {
+    console.warn("[render] failed to load persisted world state:", error?.message || error);
+  }
+}
+
+function schedulePersistWorld() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    persistWorld();
+  }, 200);
+}
+
+function persistWorld() {
+  try {
+    mkdirSync(dirname(WORLD_STATE_PATH), { recursive: true });
+    writeFileSync(
+      WORLD_STATE_PATH,
+      JSON.stringify(
+        {
+          pins: world.pins,
+          pinsRevision: world.pinsRevision,
+          updatedAt: world.updatedAt,
+        },
+        null,
+        2
+      ),
+      "utf8"
+    );
+  } catch (error) {
+    console.warn("[render] failed to persist world state:", error?.message || error);
+  }
+}
+
+process.on("SIGINT", () => {
+  persistWorld();
+  process.exit(0);
+});
+
+process.on("SIGTERM", () => {
+  persistWorld();
+  process.exit(0);
+});
 
 function safePath(urlPath) {
   const normalized = normalize(decodeURIComponent(urlPath)).replace(/^(\.\.[/\\])+/, "");
