@@ -109,6 +109,7 @@ export class RemoteAvatarStore {
       prev.target.position = state.position;
       prev.target.yaw = state.yaw;
       prev.maskId = state.maskId || prev.maskId;
+      prev.smoking = Boolean(state.smoking);
       prev.updatedAt = Date.now();
       return;
     }
@@ -121,6 +122,7 @@ export class RemoteAvatarStore {
         yaw: state.yaw,
       },
       maskId: state.maskId || null,
+      smoking: Boolean(state.smoking),
       updatedAt: Date.now(),
     });
   }
@@ -197,6 +199,7 @@ function sanitizeRemoteState(raw) {
     position: { x, y, z },
     yaw,
     maskId: raw?.maskId ? String(raw.maskId) : null,
+    smoking: Boolean(raw?.smoking),
   };
 }
 

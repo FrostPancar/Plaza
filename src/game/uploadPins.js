@@ -5,6 +5,7 @@ const MAX_FILE_SIZE_MEDIA = 10 * 1024 * 1024;
 const FILE_PIN_RADIUS = 6;
 const GRAFFITI_PIN_RADIUS = 8;
 const AUDIO_RADIUS_MULTIPLIER = 4;
+const FOLDER_PIN_RADIUS = 4;
 const MEDIA_PREVIEW_ACTIVE_DISTANCE = 28;
 const MODEL_DEFAULT_COLOR = "#cad9f7";
 const AIM_RAYCAST_INTERVAL = 1 / 24;
@@ -12,13 +13,37 @@ let mediaSourceHost = null;
 
 const SUPPORTED_TYPES = {
   "audio/mpeg": "audio",
+  "audio/wav": "audio",
+  "audio/x-wav": "audio",
+  "audio/m4a": "audio",
+  "audio/mp4": "audio",
+  "audio/flac": "audio",
   "application/pdf": "pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.ms-excel": "xlsx",
+  "text/csv": "csv",
+  "text/markdown": "md",
+  "application/json": "json",
+  "application/zip": "zip",
+  "application/x-zip-compressed": "zip",
+  "application/x-rar-compressed": "rar",
+  "application/x-7z-compressed": "7z",
+  "model/gltf-binary": "glb",
+  "model/gltf+json": "gltf",
+  "model/fbx": "fbx",
+  "text/plain": "txt",
   "image/png": "image",
   "image/jpeg": "image",
+  "image/webp": "image",
+  "image/avif": "image",
+  "image/heic": "image",
   "image/gif": "gif",
   "video/mp4": "video",
   "video/webm": "video",
   "video/quicktime": "video",
+  "video/x-matroska": "video",
   "model/obj": "obj",
   "model/stl": "stl",
   "application/sla": "stl",
@@ -29,10 +54,30 @@ function getFileType(file) {
   if (SUPPORTED_TYPES[file.type]) return SUPPORTED_TYPES[file.type];
   const name = file.name.toLowerCase();
   if (name.endsWith(".mp3")) return "audio";
+  if (name.endsWith(".wav") || name.endsWith(".m4a") || name.endsWith(".flac")) return "audio";
   if (name.endsWith(".pdf")) return "pdf";
-  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image";
+  if (name.endsWith(".docx")) return "docx";
+  if (name.endsWith(".pptx") || name.endsWith(".key")) return "pptx";
+  if (name.endsWith(".xlsx") || name.endsWith(".xls")) return "xlsx";
+  if (name.endsWith(".csv")) return "csv";
+  if (name.endsWith(".md")) return "md";
+  if (name.endsWith(".json")) return "json";
+  if (name.endsWith(".zip")) return "zip";
+  if (name.endsWith(".rar")) return "rar";
+  if (name.endsWith(".7z")) return "7z";
+  if (name.endsWith(".gltf")) return "gltf";
+  if (name.endsWith(".glb")) return "glb";
+  if (name.endsWith(".fbx")) return "fbx";
+  if (name.endsWith(".psd")) return "psd";
+  if (name.endsWith(".ai")) return "ai";
+  if (name.endsWith(".fig")) return "fig";
+  if (name.endsWith(".js")) return "js";
+  if (name.endsWith(".ts")) return "ts";
+  if (name.endsWith(".py")) return "py";
+  if (name.endsWith(".txt")) return "txt";
+  if (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".webp") || name.endsWith(".avif") || name.endsWith(".heic")) return "image";
   if (name.endsWith(".gif")) return "gif";
-  if (name.endsWith(".mp4") || name.endsWith(".webm") || name.endsWith(".mov")) return "video";
+  if (name.endsWith(".mp4") || name.endsWith(".webm") || name.endsWith(".mov") || name.endsWith(".mkv")) return "video";
   if (name.endsWith(".obj")) return "obj";
   if (name.endsWith(".stl")) return "stl";
   return "file";
@@ -212,6 +257,29 @@ function readAsDataUrl(file) {
   });
 }
 
+async function readImageThumbnailDataUrl(file, maxEdge = 280) {
+  const source = await readAsDataUrl(file);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const srcW = Math.max(1, img.naturalWidth || img.width || 1);
+      const srcH = Math.max(1, img.naturalHeight || img.height || 1);
+      const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+      const outW = Math.max(1, Math.round(srcW * scale));
+      const outH = Math.max(1, Math.round(srcH * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, outW, outH);
+      ctx.drawImage(img, 0, 0, outW, outH);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    img.onerror = () => resolve(source);
+    img.src = source;
+  });
+}
+
 function createIconCanvas(label, bg, fg) {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
@@ -261,7 +329,7 @@ function createMacFolderAudioCanvas() {
   return canvas;
 }
 
-function createRoundedImageTexture(THREE, imageLoader, dataUrl, width = 512, height = 360, radius = 38) {
+function createRoundedImageTexture(THREE, imageLoader, dataUrl, width = 512, height = 360, radius = 38, backgroundColor = "") {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -293,6 +361,10 @@ function createRoundedImageTexture(THREE, imageLoader, dataUrl, width = 512, hei
       ctx.quadraticCurveTo(0, 0, radius, 0);
       ctx.closePath();
       ctx.clip();
+      if (backgroundColor) {
+        ctx.fillStyle = backgroundColor;
+        ctx.fillRect(0, 0, width, height);
+      }
 
       const scale = Math.max(width / image.width, height / image.height);
       const drawW = image.width * scale;
@@ -438,11 +510,25 @@ function detachMediaSource(node) {
   if (node.parentElement === mediaSourceHost) mediaSourceHost.removeChild(node);
 }
 
-function createPdfThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+function createDocumentThumbnailTexture(THREE, kind, fileName, width = 612, height = 792, radius = 38) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d");
+  const safeKind = String(kind || "PDF").toUpperCase();
+  const accentByKind = {
+    PDF: "#a12d2d",
+    DOCX: "#2c5fa8",
+    TXT: "#42614a",
+    PPTX: "#b75d1f",
+    XLSX: "#237a4a",
+    CSV: "#1f7b58",
+    MD: "#5a6472",
+    JSON: "#50697f",
+    CODE: "#47537f",
+  };
+  const accent = accentByKind[safeKind] || "#a12d2d";
+  const fg = safeKind === "TXT" ? "#e8fff0" : "#fff1f1";
 
   ctx.clearRect(0, 0, width, height);
   ctx.save();
@@ -465,13 +551,13 @@ function createPdfThumbnailTexture(THREE, fileName, width = 612, height = 792, r
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.fillStyle = "#a12d2d";
+  ctx.fillStyle = accent;
   ctx.fillRect(0, 0, width, 78);
-  ctx.fillStyle = "#fff1f1";
+  ctx.fillStyle = fg;
   ctx.font = "bold 38px 'Segoe UI', sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";
-  ctx.fillText("PDF", 28, 39);
+  ctx.fillText(safeKind, 28, 39);
 
   ctx.fillStyle = "#2a3340";
   ctx.font = "600 26px 'Segoe UI', sans-serif";
@@ -495,11 +581,81 @@ function createPdfThumbnailTexture(THREE, fileName, width = 612, height = 792, r
   return texture;
 }
 
+function createPdfThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "PDF", fileName, width, height, radius);
+}
+
+function createDocxThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "DOCX", fileName, width, height, radius);
+}
+
+function createTxtThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "TXT", fileName, width, height, radius);
+}
+
+function createPptxThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "PPTX", fileName, width, height, radius);
+}
+
+function createXlsxThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "XLSX", fileName, width, height, radius);
+}
+
+function createCsvThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "CSV", fileName, width, height, radius);
+}
+
+function createMdThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "MD", fileName, width, height, radius);
+}
+
+function createJsonThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "JSON", fileName, width, height, radius);
+}
+
+function createCodeThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "CODE", fileName, width, height, radius);
+}
+
+const DOCUMENT_THUMB_TYPES = new Set(["pdf", "docx", "txt", "pptx", "xlsx", "csv", "md", "json", "js", "ts", "py"]);
+
+function createDocumentTypeTexture(THREE, fileType, fileName, width = 612, height = 792, radius = 38) {
+  if (fileType === "pdf") return createPdfThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "docx") return createDocxThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "txt") return createTxtThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "pptx") return createPptxThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "xlsx") return createXlsxThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "csv") return createCsvThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "md") return createMdThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "json") return createJsonThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "js" || fileType === "ts" || fileType === "py") {
+    return createCodeThumbnailTexture(THREE, fileName, width, height, radius);
+  }
+  return null;
+}
+
 function pinTypeToIcon(pinType) {
   if (pinType === "audio") return { macFolder: true };
   if (pinType === "pdf") return { text: "PDF", bg: "#6d2f2f", fg: "#ffe3e3" };
+  if (pinType === "docx") return { text: "DOCX", bg: "#2c5fa8", fg: "#e6efff" };
+  if (pinType === "pptx") return { text: "PPTX", bg: "#b75d1f", fg: "#fff1e5" };
+  if (pinType === "xlsx") return { text: "XLSX", bg: "#237a4a", fg: "#e9fff3" };
+  if (pinType === "csv") return { text: "CSV", bg: "#1f7b58", fg: "#e8fff4" };
+  if (pinType === "md") return { text: "MD", bg: "#5a6472", fg: "#eef2fa" };
+  if (pinType === "json") return { text: "JSON", bg: "#50697f", fg: "#e9f2ff" };
+  if (pinType === "txt") return { text: "TXT", bg: "#42614a", fg: "#e8fff0" };
+  if (pinType === "zip") return { text: "ZIP", bg: "#5a4a2f", fg: "#fff3df" };
+  if (pinType === "rar") return { text: "RAR", bg: "#59407b", fg: "#f0e6ff" };
+  if (pinType === "7z") return { text: "7Z", bg: "#3d4e66", fg: "#ebf3ff" };
   if (pinType === "video") return { text: "VID", bg: "#2f3b6d", fg: "#dfe4ff" };
   if (pinType === "gif") return { text: "GIF", bg: "#3b2f6d", fg: "#e7ddff" };
+  if (pinType === "gltf" || pinType === "glb" || pinType === "fbx") return { text: "3D", bg: "#2d4f6d", fg: "#def3ff" };
+  if (pinType === "psd") return { text: "PSD", bg: "#1c4f7c", fg: "#dff4ff" };
+  if (pinType === "ai") return { text: "AI", bg: "#7f4e1e", fg: "#fff1de" };
+  if (pinType === "fig") return { text: "FIG", bg: "#7d255f", fg: "#ffe5f6" };
+  if (pinType === "js") return { text: "JS", bg: "#7a6b1f", fg: "#fff9de" };
+  if (pinType === "ts") return { text: "TS", bg: "#2a4f8a", fg: "#e3ecff" };
+  if (pinType === "py") return { text: "PY", bg: "#3d5f4f", fg: "#e9fff3" };
   if (pinType === "obj") return { text: "OBJ", bg: "#2d4f6d", fg: "#def3ff" };
   if (pinType === "stl") return { text: "STL", bg: "#1f4f6f", fg: "#ddf6ff" };
   if (pinType === "folder") return { text: "DIR", bg: "#2b4e63", fg: "#e2f5ff" };
@@ -515,6 +671,42 @@ function inferFolderEntryType(name, mimeType) {
   if (safeMime.startsWith("video/") || /\.(mp4|webm|mov|mkv)$/.test(safeName)) return "video";
   if (safeMime.startsWith("audio/") || /\.(mp3|wav|ogg|m4a|flac)$/.test(safeName)) return "audio";
   if (safeMime === "application/pdf" || /\.pdf$/.test(safeName)) return "pdf";
+  if (
+    safeMime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    /\.docx$/.test(safeName)
+  ) {
+    return "docx";
+  }
+  if (safeMime === "text/plain" || /\.txt$/.test(safeName)) return "txt";
+  if (
+    safeMime === "application/vnd.openxmlformats-officedocument.presentationml.presentation" ||
+    /\.pptx$/.test(safeName) ||
+    /\.key$/.test(safeName)
+  ) {
+    return "pptx";
+  }
+  if (
+    safeMime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+    safeMime === "application/vnd.ms-excel" ||
+    /\.xlsx?$/.test(safeName)
+  ) {
+    return "xlsx";
+  }
+  if (safeMime === "text/csv" || /\.csv$/.test(safeName)) return "csv";
+  if (safeMime === "text/markdown" || /\.md$/.test(safeName)) return "md";
+  if (safeMime === "application/json" || /\.json$/.test(safeName)) return "json";
+  if (/\.js$/.test(safeName)) return "js";
+  if (/\.ts$/.test(safeName)) return "ts";
+  if (/\.py$/.test(safeName)) return "py";
+  if (/\.zip$/.test(safeName)) return "zip";
+  if (/\.rar$/.test(safeName)) return "rar";
+  if (/\.7z$/.test(safeName)) return "7z";
+  if (/\.gltf$/.test(safeName)) return "gltf";
+  if (/\.glb$/.test(safeName)) return "glb";
+  if (/\.fbx$/.test(safeName)) return "fbx";
+  if (/\.psd$/.test(safeName)) return "psd";
+  if (/\.ai$/.test(safeName)) return "ai";
+  if (/\.fig$/.test(safeName)) return "fig";
   if (safeMime.includes("zip") || /\.(zip|rar|7z|tar|gz)$/.test(safeName)) return "archive";
   if (safeMime.includes("json") || /\.(txt|md|json|xml|csv|log)$/.test(safeName)) return "text";
   if (safeMime.includes("model") || /\.(obj|stl|fbx|gltf|glb)$/.test(safeName)) return "model";
@@ -526,10 +718,41 @@ function folderEntryIcon(entryType) {
   if (entryType === "video") return { text: "VID", bg: "#2f3b6d", fg: "#dfe4ff" };
   if (entryType === "audio") return { text: "AUD", bg: "#365b72", fg: "#e2f4ff" };
   if (entryType === "pdf") return { text: "PDF", bg: "#6d2f2f", fg: "#ffe3e3" };
+  if (entryType === "docx") return { text: "DOCX", bg: "#2c5fa8", fg: "#e6efff" };
+  if (entryType === "pptx") return { text: "PPTX", bg: "#b75d1f", fg: "#fff1e5" };
+  if (entryType === "xlsx") return { text: "XLSX", bg: "#237a4a", fg: "#e9fff3" };
+  if (entryType === "csv") return { text: "CSV", bg: "#1f7b58", fg: "#e8fff4" };
+  if (entryType === "md") return { text: "MD", bg: "#5a6472", fg: "#eef2fa" };
+  if (entryType === "json") return { text: "JSON", bg: "#50697f", fg: "#e9f2ff" };
+  if (entryType === "js") return { text: "JS", bg: "#7a6b1f", fg: "#fff9de" };
+  if (entryType === "ts") return { text: "TS", bg: "#2a4f8a", fg: "#e3ecff" };
+  if (entryType === "py") return { text: "PY", bg: "#3d5f4f", fg: "#e9fff3" };
+  if (entryType === "txt") return { text: "TXT", bg: "#42614a", fg: "#e8fff0" };
   if (entryType === "archive") return { text: "ZIP", bg: "#5a4a2f", fg: "#fff3df" };
+  if (entryType === "zip") return { text: "ZIP", bg: "#5a4a2f", fg: "#fff3df" };
+  if (entryType === "rar") return { text: "RAR", bg: "#59407b", fg: "#f0e6ff" };
+  if (entryType === "7z") return { text: "7Z", bg: "#3d4e66", fg: "#ebf3ff" };
   if (entryType === "text") return { text: "TXT", bg: "#404a57", fg: "#eff5ff" };
+  if (entryType === "gltf" || entryType === "glb" || entryType === "fbx") return { text: "3D", bg: "#2d4f6d", fg: "#def3ff" };
+  if (entryType === "psd") return { text: "PSD", bg: "#1c4f7c", fg: "#dff4ff" };
+  if (entryType === "ai") return { text: "AI", bg: "#7f4e1e", fg: "#fff1de" };
+  if (entryType === "fig") return { text: "FIG", bg: "#7d255f", fg: "#ffe5f6" };
   if (entryType === "model") return { text: "3D", bg: "#2d4f6d", fg: "#def3ff" };
   return { text: "FILE", bg: "#4a5058", fg: "#eef2f8" };
+}
+
+function folderEntrySortRank(entryType) {
+  const type = String(entryType || "").toLowerCase();
+  if (type === "image") return 0;
+  if (type === "video") return 1;
+  if (type === "audio") return 2;
+  if (type === "pdf") return 3;
+  if (type === "docx" || type === "txt" || type === "pptx" || type === "xlsx" || type === "csv") return 3;
+  if (type === "md" || type === "json" || type === "js" || type === "ts" || type === "py") return 3;
+  if (type === "model") return 4;
+  if (type === "text") return 5;
+  if (type === "archive") return 6;
+  return 7;
 }
 
 function createFolderEntryCardTexture(THREE, entryName, entryType, size = 320) {
@@ -538,14 +761,25 @@ function createFolderEntryCardTexture(THREE, entryName, entryType, size = 320) {
   canvas.height = size;
   const ctx = canvas.getContext("2d");
   const icon = folderEntryIcon(entryType);
+  const corner = Math.round(size * 0.12);
+  const inset = Math.max(8, Math.round(size * 0.03));
+
+  ctx.clearRect(0, 0, size, size);
+  ctx.save();
+  roundedRectPath(ctx, inset, inset, size - inset * 2, size - inset * 2, corner);
+  ctx.clip();
+
   const grad = ctx.createLinearGradient(0, 0, size, size);
   grad.addColorStop(0, icon.bg);
   grad.addColorStop(1, "#111822");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
+
+  ctx.restore();
   ctx.strokeStyle = "rgba(230,240,255,0.24)";
   ctx.lineWidth = Math.max(2, Math.round(size * 0.012));
-  ctx.strokeRect(10, 10, size - 20, size - 20);
+  roundedRectPath(ctx, inset, inset, size - inset * 2, size - inset * 2, corner);
+  ctx.stroke();
   ctx.fillStyle = icon.fg;
   ctx.font = `700 ${Math.round(size * 0.22)}px Space Grotesk, sans-serif`;
   ctx.textAlign = "center";
@@ -558,6 +792,15 @@ function createFolderEntryCardTexture(THREE, entryName, entryType, size = 320) {
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.needsUpdate = true;
   return texture;
+}
+
+function sortFolderEntries(entries) {
+  if (!Array.isArray(entries)) return [];
+  return [...entries].sort((a, b) => {
+    const typeDiff = folderEntrySortRank(a?.entryType) - folderEntrySortRank(b?.entryType);
+    if (typeDiff !== 0) return typeDiff;
+    return String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { sensitivity: "base" });
+  });
 }
 
 function uid() {
@@ -852,7 +1095,7 @@ export function createUploadPinManager({
   }
 
   function setCardGeometry(pin, aspect) {
-    const { width, height } = computeCardSize(aspect, pin.fileType === "audio" ? 1.4 : 1.7);
+    const { width, height } = computeCardSize(aspect, pin.fileType === "audio" ? 1.95 : 2.15);
     pin.iconMesh.geometry.dispose();
     pin.focusMesh.geometry.dispose();
     pin.iconMesh.geometry = new THREE.PlaneGeometry(width, height);
@@ -921,8 +1164,10 @@ export function createUploadPinManager({
             name: String(entry?.name || ""),
             mimeType: String(entry?.mimeType || ""),
             size: Number(entry?.size) || 0,
+            uploadedAt: String(entry?.uploadedAt || ""),
             entryType: String(entry?.entryType || ""),
             previewDataUrl: String(entry?.previewDataUrl || ""),
+            dataUrl: String(entry?.dataUrl || ""),
           }))
         : [];
     }
@@ -957,6 +1202,13 @@ export function createUploadPinManager({
         pinGroup.remove(panel);
         panel.geometry?.dispose?.();
         panel.material?.dispose?.();
+      }
+    }
+    if (Array.isArray(pin.folderPanelShadowMeshes)) {
+      for (const shadow of pin.folderPanelShadowMeshes) {
+        pinGroup.remove(shadow);
+        shadow.geometry?.dispose?.();
+        shadow.material?.dispose?.();
       }
     }
     pin.previewDispose?.();
@@ -1001,6 +1253,7 @@ export function createUploadPinManager({
     let previewDispose = null;
     let previewSetActive = null;
     let folderPanelMeshes = null;
+    let folderPanelShadowMeshes = null;
     let folderPanelAngles = null;
     let folderRingRadius = 1.24;
     if (data.fileType === "image" && data.dataUrl) {
@@ -1013,13 +1266,13 @@ export function createUploadPinManager({
         new THREE.MeshBasicMaterial({ map: imageTexture, transparent: true, alphaTest: 0.06 })
       );
       shadowRadius = 0.78;
-    } else if (data.fileType === "pdf") {
-      const pdfTexture = createPdfThumbnailTexture(THREE, data.fileName);
-      textureRef = pdfTexture;
-      textureAspect = pdfTexture.userData?.aspect || 0.77;
+    } else if (DOCUMENT_THUMB_TYPES.has(data.fileType)) {
+      const documentTexture = createDocumentTypeTexture(THREE, data.fileType, data.fileName);
+      textureRef = documentTexture;
+      textureAspect = documentTexture?.userData?.aspect || 0.77;
       iconMesh = new THREE.Mesh(
         new THREE.PlaneGeometry(1.7, 1.7),
-        new THREE.MeshBasicMaterial({ map: pdfTexture, transparent: true, alphaTest: 0.06 })
+        new THREE.MeshBasicMaterial({ map: documentTexture, transparent: true, alphaTest: 0.06 })
       );
       shadowRadius = 0.78;
     } else if (data.fileType === "video" || data.fileType === "gif") {
@@ -1046,17 +1299,20 @@ export function createUploadPinManager({
       shadowRadius = 1.45;
     } else if (data.fileType === "folder") {
       iconMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.78, 1.78, 0.08, 56),
-        new THREE.MeshStandardMaterial({
-          color: 0xd7e2f0,
-          roughness: 0.84,
-          metalness: 0.06,
+        new THREE.PlaneGeometry(0.78, 0.78),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          side: THREE.DoubleSide,
         })
       );
       const entryCount = Array.isArray(data.folderEntries) ? data.folderEntries.length : 0;
       const panelCount = Math.max(1, entryCount || 1);
-      folderRingRadius = 1.24;
+      folderRingRadius = 1.9;
       folderPanelMeshes = [];
+      folderPanelShadowMeshes = [];
       folderPanelAngles = [];
       for (let i = 0; i < panelCount; i += 1) {
         const entry = Array.isArray(data.folderEntries) ? data.folderEntries[i] || null : null;
@@ -1067,31 +1323,58 @@ export function createUploadPinManager({
         const heightStagger = ((i % 4) - 1.5) * 0.01;
         const entryType = String(entry?.entryType || inferFolderEntryType(entry?.name, entry?.mimeType));
         const hasPreview = Boolean(entry?.previewDataUrl);
+        const isAudioEntry = entryType === "audio";
         const panelTexture = hasPreview
           ? createRoundedImageTexture(THREE, imageLoader, entry.previewDataUrl, 320, 320, 18)
-          : createFolderEntryCardTexture(THREE, entry?.name || `Item ${i + 1}`, entryType, 320);
+          : isAudioEntry
+            ? createRoundedImageTexture(THREE, imageLoader, "./assets/audio-folder-icon.png", 320, 320, 18, "#ffffff")
+            : DOCUMENT_THUMB_TYPES.has(entryType)
+              ? createDocumentTypeTexture(THREE, entryType, entry?.name || `Item ${i + 1}`, 390, 505, 22)
+              : createFolderEntryCardTexture(THREE, entry?.name || `Item ${i + 1}`, entryType, 320);
+        const panelAspect = Number(panelTexture?.userData?.aspect) > 0 ? Number(panelTexture.userData.aspect) : 1;
+        const panelSize = computeCardSize(panelAspect, 1.38);
         const panel = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.44, 0.44),
+          new THREE.PlaneGeometry(panelSize.width, panelSize.height),
           new THREE.MeshStandardMaterial({
             map: panelTexture,
             color: 0xffffff,
-            roughness: 0.6,
+            roughness: isAudioEntry ? 0.5 : 0.6,
             metalness: 0.02,
             emissive: 0x0f1622,
             emissiveIntensity: 0.03,
+            transparent: true,
+            alphaTest: 0.06,
             side: THREE.DoubleSide,
           })
         );
+        panel.renderOrder = 320;
         panel.position.set(
           data.position.x + outwardX * (folderRingRadius + depthStagger),
-          0.36 + heightStagger,
+          1.8 + heightStagger,
           data.position.z + outwardZ * (folderRingRadius + depthStagger)
         );
         panel.rotation.y = Math.atan2(outwardX, outwardZ) - Math.PI / 2;
         panel.rotation.x = -0.03;
         panel.userData.pinId = data.id;
         pinGroup.add(panel);
+        const panelShadow = new THREE.Mesh(
+          new THREE.CircleGeometry(Math.max(panelSize.width, panelSize.height) * 0.34, 28),
+          new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            transparent: true,
+            opacity: 0.18,
+            depthWrite: false,
+          })
+        );
+        panelShadow.rotation.x = -Math.PI / 2;
+        panelShadow.position.set(
+          data.position.x + outwardX * (folderRingRadius + depthStagger),
+          0.035,
+          data.position.z + outwardZ * (folderRingRadius + depthStagger)
+        );
+        pinGroup.add(panelShadow);
         folderPanelMeshes.push(panel);
+        folderPanelShadowMeshes.push(panelShadow);
         folderPanelAngles.push(angle);
       }
       shadowRadius = 2.05;
@@ -1173,12 +1456,12 @@ export function createUploadPinManager({
         depthWrite: false,
       })
     );
-    const iconY = isModelPin ? modelBaseY : isDecoratePin ? 0.03 : isFolderPin ? 0.08 : 1.8;
+    const iconY = isModelPin ? modelBaseY : isDecoratePin ? 0.03 : isFolderPin ? 1.8 : 1.8;
     iconMesh.position.set(data.position.x, iconY, data.position.z);
     focusMesh.position.copy(iconMesh.position);
     shadowMesh.rotation.x = -Math.PI / 2;
     shadowMesh.position.set(data.position.x, 0.035, data.position.z);
-    if (isDecoratePin) shadowMesh.visible = false;
+    if (isDecoratePin || isFolderPin) shadowMesh.visible = false;
     pinGroup.add(focusMesh);
     pinGroup.add(shadowMesh);
     pinGroup.add(iconMesh);
@@ -1195,7 +1478,7 @@ export function createUploadPinManager({
     );
     ringMesh.rotation.x = -Math.PI / 2;
     ringMesh.position.set(data.position.x, 0.02, data.position.z);
-    ringMesh.visible = false;
+    ringMesh.visible = data.fileType === "folder";
     pinGroup.add(ringMesh);
 
     let progressTrackMesh = null;
@@ -1276,6 +1559,7 @@ export function createUploadPinManager({
       modelUvMapDataUrl: isModelPin ? String(data.modelUvMapDataUrl || "") : "",
       modelUvTexture: null,
       folderPanelMeshes,
+      folderPanelShadowMeshes,
       folderPanelAngles,
       folderRingRadius,
       folderEntries: Array.isArray(data.folderEntries)
@@ -1284,8 +1568,10 @@ export function createUploadPinManager({
             name: String(entry?.name || ""),
             mimeType: String(entry?.mimeType || ""),
             size: Number(entry?.size) || 0,
+            uploadedAt: String(entry?.uploadedAt || ""),
             entryType: String(entry?.entryType || ""),
             previewDataUrl: String(entry?.previewDataUrl || ""),
+            dataUrl: String(entry?.dataUrl || ""),
           }))
         : [],
       previewUpdate,
@@ -1410,6 +1696,7 @@ export function createUploadPinManager({
     const rootName = firstPath.split("/").filter(Boolean)[0] || "folder";
     const entries = [];
     let totalSize = 0;
+    const uploadStamp = new Date().toISOString();
     for (const file of fileList) {
       const size = Number(file.size) || 0;
       totalSize += size;
@@ -1419,9 +1706,15 @@ export function createUploadPinManager({
       const mimeType = String(file.type || "application/octet-stream");
       const entryType = inferFolderEntryType(name, mimeType);
       let previewDataUrl = "";
+      let entryDataUrl = "";
+      try {
+        entryDataUrl = await readAsDataUrl(file);
+      } catch {
+        entryDataUrl = "";
+      }
       if (entryType === "image" && size > 0) {
         try {
-          previewDataUrl = await readAsDataUrl(file);
+          previewDataUrl = await readImageThumbnailDataUrl(file);
         } catch {
           previewDataUrl = "";
         }
@@ -1431,10 +1724,13 @@ export function createUploadPinManager({
         name,
         mimeType,
         size,
+        uploadedAt: uploadStamp,
         entryType,
         previewDataUrl,
+        dataUrl: entryDataUrl,
       });
     }
+    const sortedEntries = sortFolderEntries(entries);
     const owner = getOwnerIdentity?.() || {};
     const pin = spawnPin({
       id: uid(),
@@ -1445,18 +1741,82 @@ export function createUploadPinManager({
       mimeType: "application/x-folder",
       size: totalSize,
       dataUrl: `folder://${encodeURIComponent(rootName)}`,
-      folderEntries: entries,
+      folderEntries: sortedEntries,
       position: {
         x: Number(playerPosition.x.toFixed(2)),
         y: Number(playerPosition.y.toFixed(2)),
         z: Number(playerPosition.z.toFixed(2)),
       },
-      radius: FILE_PIN_RADIUS + 2,
+      radius: FOLDER_PIN_RADIUS,
       createdAt: new Date().toISOString(),
     });
     if (!pin) return null;
     syncPersistence();
     return pin;
+  }
+
+  async function appendFilesToFolder(folderPinId, files, requesterOwnerId = null) {
+    const pin = pins.find((p) => p.id === folderPinId);
+    if (!pin || pin.fileType !== "folder") return null;
+    void requesterOwnerId;
+
+    const fileList = Array.isArray(files) ? files.filter((file) => file && typeof file.name === "string") : [];
+    if (!fileList.length) return null;
+
+    const newEntries = [];
+    const uploadStamp = new Date().toISOString();
+    for (const file of fileList) {
+      const fileType = getFileType(file);
+      const maxSize = getMaxSizeForType(fileType);
+      if ((Number(file.size) || 0) > maxSize) continue;
+
+      const size = Number(file.size) || 0;
+      const path = String(file.name || "item");
+      const name = path.split("/").pop() || file.name || "item";
+      const mimeType = String(file.type || "application/octet-stream");
+      const entryType = inferFolderEntryType(name, mimeType);
+
+      let previewDataUrl = "";
+      let entryDataUrl = "";
+      try {
+        entryDataUrl = await readAsDataUrl(file);
+      } catch {
+        entryDataUrl = "";
+      }
+      if (entryType === "image" && size > 0) {
+        try {
+          previewDataUrl = await readImageThumbnailDataUrl(file);
+        } catch {
+          previewDataUrl = "";
+        }
+      }
+
+      newEntries.push({
+        path,
+        name,
+        mimeType,
+        size,
+        uploadedAt: uploadStamp,
+        entryType,
+        previewDataUrl,
+        dataUrl: entryDataUrl,
+      });
+    }
+    if (!newEntries.length) return null;
+
+    const mergedEntries = sortFolderEntries([...(pin.folderEntries || []), ...newEntries]);
+    const nextData = pinToSerializable(pin);
+    nextData.folderEntries = mergedEntries;
+    nextData.size = mergedEntries.reduce((sum, entry) => sum + (Number(entry?.size) || 0), 0);
+    if (!nextData.dataUrl) nextData.dataUrl = `folder://${encodeURIComponent(nextData.fileName || "folder")}`;
+    nextData.position = { ...pin.position };
+    nextData.radius = pin.radius;
+
+    destroyPin(pin);
+    const nextPin = spawnPin(nextData);
+    if (!nextPin) return null;
+    syncPersistence();
+    return pinToSerializable(nextPin);
   }
 
   function addImageDataPinAtPlayer({ dataUrl, fileName = "selfie.jpg", mimeType = "image/jpeg", playerPosition }) {
@@ -1570,6 +1930,8 @@ export function createUploadPinManager({
         radius:
           item.fileType === "audio"
             ? Math.max(Number(item.radius) || 0, FILE_PIN_RADIUS * AUDIO_RADIUS_MULTIPLIER)
+            : item.fileType === "folder"
+              ? Number(item.radius) || FOLDER_PIN_RADIUS
             : Number(item.radius) ||
               (item.fileType === "graffiti" ? GRAFFITI_PIN_RADIUS : FILE_PIN_RADIUS),
         createdAt: item.createdAt || new Date().toISOString(),
@@ -1614,6 +1976,8 @@ export function createUploadPinManager({
           radius:
             item.fileType === "audio"
               ? Math.max(Number(item.radius) || 0, FILE_PIN_RADIUS * AUDIO_RADIUS_MULTIPLIER)
+              : item.fileType === "folder"
+                ? Number(item.radius) || FOLDER_PIN_RADIUS
               : Number(item.radius) ||
                 (item.fileType === "graffiti" ? GRAFFITI_PIN_RADIUS : FILE_PIN_RADIUS),
           createdAt: item.createdAt || new Date().toISOString(),
@@ -1674,11 +2038,12 @@ export function createUploadPinManager({
         pin.modelMesh.position.set(pin.position.x, pin.modelBaseY, pin.position.z);
         pin.focusMesh.position.copy(pin.modelMesh.position);
       } else if (pin.isFolderPin) {
-        pin.iconMesh.position.set(pin.position.x, 0.08, pin.position.z);
+        pin.iconMesh.position.set(pin.position.x, 1.8, pin.position.z);
         if (Array.isArray(pin.folderPanelMeshes) && Array.isArray(pin.folderPanelAngles)) {
           const radius = Number(pin.folderRingRadius) || 1.24;
           for (let i = 0; i < pin.folderPanelMeshes.length; i += 1) {
             const panel = pin.folderPanelMeshes[i];
+            const panelShadow = Array.isArray(pin.folderPanelShadowMeshes) ? pin.folderPanelShadowMeshes[i] : null;
             const angle = pin.folderPanelAngles[i] || 0;
             const outwardX = Math.cos(angle);
             const outwardZ = Math.sin(angle);
@@ -1686,14 +2051,21 @@ export function createUploadPinManager({
             const heightStagger = ((i % 4) - 1.5) * 0.01;
             panel.position.set(
               pin.position.x + outwardX * (radius + depthStagger),
-              0.36 + heightStagger,
+              1.8 + heightStagger,
               pin.position.z + outwardZ * (radius + depthStagger)
             );
             panel.rotation.y = Math.atan2(outwardX, outwardZ) - Math.PI / 2;
             panel.rotation.x = -0.03;
+            if (panelShadow) {
+              panelShadow.position.set(
+                pin.position.x + outwardX * (radius + depthStagger),
+                0.035,
+                pin.position.z + outwardZ * (radius + depthStagger)
+              );
+            }
           }
         }
-        pin.focusMesh.position.set(pin.position.x, 0.36, pin.position.z);
+        pin.focusMesh.position.set(pin.position.x, 1.8, pin.position.z);
       } else if (!pin.isDecoratePin) {
         pin.iconMesh.lookAt(camera.position);
         pin.focusMesh.lookAt(camera.position);
@@ -1725,7 +2097,7 @@ export function createUploadPinManager({
       } else {
         pin.focusMesh.scale.copy(pin.iconMesh.scale);
       }
-      pin.ringMesh.material.opacity = 0;
+      pin.ringMesh.material.opacity = pin.fileType === "folder" ? (inRadius ? 0.2 : 0.1) : 0;
       pin.focusMesh.material.opacity = 0;
 
       if (pin.progressTrackMesh && pin.progressFillMesh) {
@@ -1812,6 +2184,15 @@ export function createUploadPinManager({
     return stored;
   }
 
+  function canPickupOwnedPinAtPointer(clientX, clientY, domElement, requesterOwnerId = null) {
+    const pin = getPinAtPointer(clientX, clientY, domElement);
+    if (!pin) return false;
+    if (!pin.inRadius) return false;
+    if (pin.fileType === "graffiti") return false;
+    if (!canRequesterControlOwner(pin.ownerId, requesterOwnerId)) return false;
+    return true;
+  }
+
   function placeStoredPin(storedPin, targetPosition, requesterOwnerId = null) {
     if (!storedPin || typeof storedPin !== "object") return null;
     const fileType = String(storedPin.fileType || "");
@@ -1828,6 +2209,10 @@ export function createUploadPinManager({
     const radius =
       fileType === "audio"
         ? Math.max(Number.isFinite(numericRadius) ? numericRadius : 0, FILE_PIN_RADIUS * AUDIO_RADIUS_MULTIPLIER)
+        : fileType === "folder"
+          ? Number.isFinite(numericRadius) && numericRadius > 0
+            ? numericRadius
+            : FOLDER_PIN_RADIUS
         : Number.isFinite(numericRadius) && numericRadius > 0
           ? numericRadius
           : FILE_PIN_RADIUS;
@@ -1904,10 +2289,30 @@ export function createUploadPinManager({
     }
 
     const pin = getPinAtPointer(clientX, clientY, domElement);
-    if (!pin) return false;
     if (pin && pin.inRadius && pin.fileType !== "graffiti" && pin.fileType !== "decorate") {
       overlay.show(pin);
       return true;
+    }
+    raycaster.setFromCamera(ndc, camera);
+    const groundHits = raycaster.intersectObjects(drawables, false);
+    const groundPoint = groundHits[0]?.point;
+    if (groundPoint) {
+      let folderPin = null;
+      let bestDistance = Infinity;
+      for (const candidate of pins) {
+        if (candidate?.fileType !== "folder") continue;
+        if (!candidate.inRadius) continue;
+        const d = distance2D(candidate.position, groundPoint);
+        if (d > candidate.radius) continue;
+        if (d < bestDistance) {
+          bestDistance = d;
+          folderPin = candidate;
+        }
+      }
+      if (folderPin) {
+        overlay.show(folderPin);
+        return true;
+      }
     }
     return false;
   }
@@ -2043,6 +2448,7 @@ export function createUploadPinManager({
   return {
     addFileAtPlayer,
     addFolderAtPlayer,
+    appendFilesToFolder,
     addDecorImagePinAtPlayer,
     addImageDataPinAtPlayer,
     addGraffitiPinAtPlayer,
@@ -2053,6 +2459,7 @@ export function createUploadPinManager({
     setBrushSize,
     paintAtPointer,
     deletePin,
+    canPickupOwnedPinAtPointer,
     pickupOwnedPinAtPointer,
     placeStoredPin,
     setModelColor,

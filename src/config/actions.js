@@ -5,7 +5,6 @@ export function createActionRegistry({
   onDocumentSelf,
   onGraffiti,
   onBuild,
-  onChangeMask,
   onSmoke,
   onDarkMode,
   disableDecorate = false,
@@ -13,15 +12,20 @@ export function createActionRegistry({
   void onGraffiti;
   void onBuild;
   const actions = [
-    { id: "drop-file", label: "Drop File", enabled: true, handler: () => onDropFile?.() },
-    { id: "drop-folder", label: "Upload Folder", enabled: true, handler: () => onDropFolder?.() },
-    { id: "document-self", label: "Document Self", enabled: true, handler: () => onDocumentSelf?.() },
-    { id: "smoke", label: "Smoke", enabled: true, handler: () => onSmoke?.() },
-    { id: "dark-mode", label: "Dark Mode", enabled: true, handler: () => onDarkMode?.() },
-    { id: "change-mask", label: "Change Mask", enabled: true, handler: () => onChangeMask?.() },
+    { id: "drop-file", label: "Drop File", icon: "./assets/Upload.png", enabled: true, handler: () => onDropFile?.() },
+    { id: "dark-mode", label: "Dark Mode", icon: "./assets/Night_Day.png", enabled: true, handler: () => onDarkMode?.() },
+    { id: "document-self", label: "Document Self", icon: "./assets/Document.png", enabled: true, handler: () => onDocumentSelf?.() },
+    { id: "smoke", label: "Smoke", icon: "./assets/Smoke.png", enabled: true, handler: () => onSmoke?.() },
+    { id: "drop-folder", label: "Upload Folder", icon: "./assets/Folder.png", enabled: true, handler: () => onDropFolder?.() },
   ];
   if (!disableDecorate) {
-    actions.splice(1, 0, { id: "decorate", label: "Decorate", enabled: true, handler: () => onDecorate?.() });
+    actions.splice(2, 0, {
+      id: "decorate",
+      label: "Decorate",
+      icon: "./assets/Decorate.png",
+      enabled: true,
+      handler: () => onDecorate?.(),
+    });
   }
   return actions;
 }

@@ -152,25 +152,19 @@
         position: absolute;
         left: 50%;
         top: 50%;
-        border: 1px solid rgba(220, 236, 255, 0.22);
-        border-radius: 999px;
-        background: rgba(7, 10, 14, 0.96);
-        color: #eef6ff;
-        padding: 12px 16px;
-        min-width: 104px;
-        text-align: center;
-        font-size: 0.9rem;
-        font-weight: 600;
+        border: none;
+        border-radius: 14px;
+        background: transparent;
+        padding: 3px;
+        width: 90px;
+        height: 90px;
         backdrop-filter: blur(5px);
         transform: translate(-50%, -50%) scale(0.62);
         opacity: 0;
         pointer-events: none;
         cursor: pointer;
         transition: transform 280ms cubic-bezier(0.2, 0.74, 0.2, 1), opacity 220ms ease, border-color 160ms ease;
-        box-shadow:
-          inset 0 0 0 1px rgba(200, 214, 236, 0.08),
-          0 0 20px rgba(160, 240, 176, 0.38),
-          inset 0 0 26px rgba(160, 240, 176, 0.2);
+        box-shadow: none;
       }
 
       .action-dial-item.open {
@@ -180,27 +174,38 @@
       }
 
       .action-dial-item:hover {
-        border-color: rgba(225, 236, 252, 0.6);
+        border-color: transparent;
       }
 
-      .action-dial-item:nth-of-type(2n) {
-        border-radius: 18px;
-        box-shadow:
-          inset 0 0 0 1px rgba(214, 204, 250, 0.1),
-          0 0 20px rgba(176, 152, 255, 0.46),
-          inset 0 0 24px rgba(176, 152, 255, 0.22);
+      .action-dial-icon {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        border-radius: 0;
+        pointer-events: none;
       }
 
-      .action-dial-item:nth-of-type(3n) {
-        border-radius: 34px 16px 34px 16px;
+      .action-dial-label {
+        position: absolute;
+        left: 50%;
+        top: calc(100% + 8px);
+        transform: translateX(-50%) translateY(-4px);
+        color: rgba(242, 247, 255, 0.95);
+        font-size: 0.65rem;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 180ms ease, transform 180ms ease;
       }
 
-      .action-dial-item:nth-of-type(4n) {
-        border-radius: 16px 34px 16px 34px;
-      }
-
-      .action-dial-item:nth-of-type(5n) {
-        border-radius: 34px;
+      .action-dial-item:hover .action-dial-label,
+      .action-dial-item:focus-visible .action-dial-label {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
       }
 
       .action-dial-item:disabled {
@@ -217,10 +222,10 @@
       }
 
       .action-orb-shell.mobile-layout .action-dial-item {
-        min-width: min(70vw, 260px);
-        border-radius: 12px;
-        font-size: 0.92rem;
-        padding: 11px 14px;
+        width: 76px;
+        height: 76px;
+        min-width: 0;
+        padding: 2px;
       }
 
       .action-orb-shell.mobile-layout.open .action-launcher {
@@ -383,14 +388,44 @@
         border-radius: 8px;
         background: rgba(26, 30, 40, 0.85);
         max-height: min(42vh, 380px);
+        overflow: hidden;
+      }
+
+      .file-overlay-folder-controls {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(176, 186, 198, 0.16);
+      }
+
+      .file-overlay-folder-sort-label {
+        font-size: 0.74rem;
+        color: #b8c7d8;
+        letter-spacing: 0.02em;
+      }
+
+      .file-overlay-folder-sort {
+        border-radius: 6px;
+        border: 1px solid rgba(176, 186, 198, 0.35);
+        background: rgba(37, 44, 53, 0.92);
+        color: #eaf0f7;
+        padding: 4px 8px;
+        font-size: 0.74rem;
+      }
+
+      .file-overlay-folder-items {
+        max-height: min(36vh, 320px);
         overflow: auto;
       }
 
       .file-overlay-folder-row {
         padding: 8px 10px;
         border-bottom: 1px solid rgba(176, 186, 198, 0.14);
-        display: grid;
-        gap: 2px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
 
       .file-overlay-folder-row:last-child {
@@ -400,12 +435,43 @@
       .file-overlay-folder-name {
         font-size: 0.84rem;
         color: #e5eef9;
-        word-break: break-word;
+        flex: 1 1 auto;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .file-overlay-folder-meta {
         font-size: 0.74rem;
         color: #b8c7d8;
+        white-space: nowrap;
+        flex: 0 0 auto;
+      }
+
+      .file-overlay-folder-download {
+        border-radius: 7px;
+        border: 1px solid rgba(176, 186, 198, 0.35);
+        background: rgba(37, 44, 53, 0.92);
+        color: #eaf0f7;
+        padding: 4px 8px;
+        font-size: 0.72rem;
+        cursor: pointer;
+        flex: 0 0 auto;
+      }
+
+      .file-overlay-folder-add {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        border: 1px solid rgba(176, 186, 198, 0.35);
+        background: rgba(37, 44, 53, 0.92);
+        color: #eaf0f7;
+        font-size: 1rem;
+        line-height: 1;
+        font-weight: 700;
+        cursor: pointer;
+        flex: 0 0 auto;
       }
 
       .file-overlay-folder-empty {
@@ -925,15 +991,17 @@
         }
 
         .action-dial-item {
-          min-width: 92px;
-          padding: 8px 11px;
-          font-size: 0.78rem;
+          width: 76px;
+          height: 76px;
+          min-width: 0;
+          padding: 2px;
         }
 
         .action-orb-shell.mobile-layout .action-dial-item {
-          min-width: min(74vw, 240px);
-          padding: 10px 12px;
-          font-size: 0.86rem;
+          width: 76px;
+          height: 76px;
+          min-width: 0;
+          padding: 2px;
         }
 
         .action-orb-shell.mobile-layout.open .action-launcher {
@@ -1133,15 +1201,14 @@
 
       .action-dial-item {
         border-radius: 10px;
-        border: 1px solid var(--ui-border);
-        background: var(--ui-panel);
-        color: var(--ui-text);
+        border: none;
+        background: transparent;
         backdrop-filter: none;
         box-shadow: none;
       }
 
       .action-dial-item:hover {
-        border-color: var(--ui-accent);
+        border-color: transparent;
       }
 
       .file-overlay {
@@ -1185,14 +1252,26 @@
         box-shadow: none;
       }
 
+      .file-overlay-folder-controls,
       .file-overlay-folder-row {
         border-bottom: 1px solid var(--ui-border);
       }
 
       .file-overlay-folder-name,
       .file-overlay-folder-meta,
-      .file-overlay-folder-empty {
+      .file-overlay-folder-empty,
+      .file-overlay-folder-sort-label,
+      .file-overlay-folder-sort,
+      .file-overlay-folder-download,
+      .file-overlay-folder-add {
         color: var(--ui-text);
+      }
+
+      .file-overlay-folder-sort,
+      .file-overlay-folder-download,
+      .file-overlay-folder-add {
+        background: var(--ui-panel);
+        border: 1px solid var(--ui-border);
       }
 
       .file-overlay-icon-btn,
@@ -1287,6 +1366,13 @@
           top: 72px;
           width: 132px;
           padding: 8px;
+        }
+      }
+
+      @media (max-width: 760px) and (orientation: portrait) {
+        .touch-joystick {
+          left: 50%;
+          transform: translateX(-50%);
         }
       }
     </style>

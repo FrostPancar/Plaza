@@ -1,8 +1,8 @@
 const PLAYER_RADIUS = 0.35;
-const THIRD_PERSON_SMOKE_POS = { x: 0.14, y: 1.02, z: PLAYER_RADIUS + 0.18 };
+const THIRD_PERSON_SMOKE_POS = { x: 0.08, y: 1.2, z: PLAYER_RADIUS + 0.12 };
 const THIRD_PERSON_SMOKE_ROT = { x: -0.08, y: -0.22, z: 0 };
-const FIRST_PERSON_SMOKE_POS = { x: 0.22, y: -0.26, z: -0.5 };
-const FIRST_PERSON_SMOKE_ROT = { x: -0.14, y: -0.58, z: 0.12 };
+const FIRST_PERSON_SMOKE_POS = { x: 0.11, y: -0.24, z: -0.38 };
+const FIRST_PERSON_SMOKE_ROT = { x: -0.08, y: -0.92, z: 0.22 };
 const DOUBLE_TAP_MS = 280;
 
 export function createPlayerController(THREE, scene, spawn, selectedMask) {
@@ -40,6 +40,9 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
   const cigarette = createCigaretteModel(THREE);
   cigarette.visible = false;
   smokeAnchor.add(cigarette);
+  const emberMaterial = cigarette.userData.emberMaterial || null;
+  const emberGlow = cigarette.userData.emberGlow || null;
+  let emberAnimTime = 0;
 
   root.position.set(spawn.x, Math.max(spawn.y, 0), spawn.z);
   root.rotation.y = spawn.yaw || 0;
@@ -196,6 +199,7 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
       yaw: root.rotation.y,
       velocity: { x: velocity.x, y: verticalVelocity, z: velocity.z },
       grounded,
+      smoking,
     };
   }
 
@@ -212,8 +216,12 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
     smoking = !smoking;
     cigarette.visible = smoking;
     if (smoking) {
+      emberAnimTime = 0;
       emitSmoke(true);
       emitSmoke(true);
+    } else if (emberMaterial && emberGlow) {
+      emberMaterial.emissiveIntensity = 2.1;
+      emberGlow.intensity = 0.45;
     }
     return smoking;
   }
@@ -240,12 +248,12 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
       const bobY = Math.sin(viewBobTime) * 0.012;
       const bobX = Math.cos(viewBobTime * 0.5) * 0.008;
       smokeAnchor.position.set(
-        0.35 + smokeOffset.x + bobX,
-        -0.3 + smokeOffset.y + bobY,
-        -0.75 + smokeOffset.z
+        FIRST_PERSON_SMOKE_POS.x + smokeOffset.x + bobX,
+        FIRST_PERSON_SMOKE_POS.y + smokeOffset.y + bobY,
+        FIRST_PERSON_SMOKE_POS.z + smokeOffset.z
       );
-      smokeAnchor.rotation.set(-0.08, -0.92, 0.22);
-      cigarette.scale.set(2.8, 2.8, 2.8);
+      smokeAnchor.rotation.set(FIRST_PERSON_SMOKE_ROT.x, FIRST_PERSON_SMOKE_ROT.y, FIRST_PERSON_SMOKE_ROT.z);
+      cigarette.scale.set(3.25, 3.25, 3.25);
     } else {
       if (firstPersonViewModelAnchor.parent) firstPersonViewModelAnchor.parent.remove(firstPersonViewModelAnchor);
       if (smokeAnchor.parent !== root) root.add(smokeAnchor);
@@ -259,6 +267,13 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
     }
 
     if (smoking) {
+      emberAnimTime += delta * 11;
+      if (emberMaterial && emberGlow) {
+        const flicker = 0.72 + Math.sin(emberAnimTime) * 0.2 + Math.sin(emberAnimTime * 2.7) * 0.08;
+        const glowStrength = Math.max(0.35, flicker);
+        emberMaterial.emissiveIntensity = 1.5 + glowStrength * 1.3;
+        emberGlow.intensity = 0.2 + glowStrength * 0.65;
+      }
       smokeTimer += delta;
       const interval = 0.12;
       while (smokeTimer >= interval) {
@@ -387,6 +402,8 @@ function createCigaretteModel(THREE) {
   const emberGlow = new THREE.PointLight(0xff8a42, 0.45, 0.65, 2);
   emberGlow.position.x = 0.13;
   group.add(emberGlow);
+  group.userData.emberMaterial = ember.material;
+  group.userData.emberGlow = emberGlow;
 
   group.traverse((node) => {
     if (!node.isMesh || !node.material) return;

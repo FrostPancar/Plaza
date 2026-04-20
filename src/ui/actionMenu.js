@@ -23,7 +23,20 @@ export function createActionMenuUI(root, actions, options = {}) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "action-dial-item";
-    btn.textContent = action.label;
+    btn.setAttribute("aria-label", action.label);
+    btn.title = action.label;
+    if (action.icon) {
+      const icon = document.createElement("img");
+      icon.className = "action-dial-icon";
+      icon.src = action.icon;
+      icon.alt = "";
+      icon.loading = "lazy";
+      btn.appendChild(icon);
+    }
+    const label = document.createElement("span");
+    label.className = "action-dial-label";
+    label.textContent = action.label;
+    btn.appendChild(label);
     btn.disabled = !action.enabled;
     btn.addEventListener("click", () => {
       action.handler({ source: "action-menu" });
@@ -50,7 +63,7 @@ export function createActionMenuUI(root, actions, options = {}) {
   function layoutDial() {
     const count = Math.max(1, dialItems.length);
     if (mobileLayout) {
-      const spacing = window.innerWidth < 420 ? 52 : 56;
+      const spacing = window.innerWidth < 420 ? 74 : 80;
       const start = -((count - 1) * spacing) / 2;
       for (let i = 0; i < dialItems.length; i += 1) {
         const item = dialItems[i];
@@ -59,7 +72,7 @@ export function createActionMenuUI(root, actions, options = {}) {
       }
       return;
     }
-    const radius = window.innerWidth < 760 ? 116 : 146;
+    const radius = window.innerWidth < 760 ? 138 : 176;
     const startAngle = -Math.PI / 2;
     const step = (Math.PI * 2) / count;
     for (let i = 0; i < dialItems.length; i += 1) {

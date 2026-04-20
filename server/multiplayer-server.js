@@ -128,6 +128,7 @@ function sanitizePlayer(rawPlayer, maskId) {
       z: finite(pos.z, 0),
     },
     yaw: finite(player.yaw, 0),
+    smoking: Boolean(player.smoking),
     grounded: Boolean(player.grounded),
     maskId: maskId ? String(maskId) : null,
   };
@@ -155,6 +156,20 @@ function sanitizePins(rawPins, defaultOwnerId = "") {
       createdAt: String(item.createdAt || new Date().toISOString()),
       rotationY: finite(item.rotationY, 0),
       decorScale: finite(item.decorScale, 1),
+      folderEntries: Array.isArray(item.folderEntries)
+        ? item.folderEntries
+            .filter((entry) => entry && typeof entry === "object")
+            .map((entry) => ({
+              path: String(entry.path || ""),
+              name: String(entry.name || ""),
+              mimeType: String(entry.mimeType || "application/octet-stream"),
+              size: finite(entry.size, 0),
+              uploadedAt: String(entry.uploadedAt || ""),
+              entryType: String(entry.entryType || ""),
+              previewDataUrl: String(entry.previewDataUrl || ""),
+              dataUrl: String(entry.dataUrl || ""),
+            }))
+        : [],
       graffitiLayers: Array.isArray(item.graffitiLayers)
         ? item.graffitiLayers
             .filter((layer) => layer && typeof layer === "object")
@@ -186,6 +201,12 @@ function reconcilePins(currentPins, incomingPins, clientId) {
     }
     output.push({
       ...incoming,
+      folderEntries:
+        Array.isArray(incoming.folderEntries) && incoming.folderEntries.length
+          ? incoming.folderEntries
+          : Array.isArray(oldPin.folderEntries)
+            ? oldPin.folderEntries
+            : [],
       ownerId: oldPin.ownerId || clientId,
       ownerLabel: oldPin.ownerLabel || playerLabel(oldPin.ownerId || clientId),
     });

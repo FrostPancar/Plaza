@@ -28,6 +28,8 @@ const MOBILE_PICKUP_HOLD_SECONDS = 0.5;
 const INVENTORY_THROW_GRAVITY = 18;
 const INVENTORY_THROW_MAX_TIME = 3.2;
 const INVENTORY_THROW_MAX_TRAIL_POINTS = 28;
+const INVENTORY_THROW_TRAIL_HEAD_RADIUS = 0.11;
+const INVENTORY_THROW_TRAIL_TAIL_RADIUS = 0.02;
 const AUTO_QUALITY_UPDATE_SECONDS = 1;
 const AUTO_QUALITY_COOLDOWN_SECONDS = 2.5;
 const AUTO_QUALITY_DOWN_FPS = 48;
@@ -69,23 +71,6 @@ vignetteOverlay.style.pointerEvents = "none";
 vignetteOverlay.style.background =
   "radial-gradient(circle at center, rgba(0,0,0,0) 42%, rgba(0,0,0,0.55) 100%)";
 root.appendChild(vignetteOverlay);
-
-const fpsTrack = document.createElement("div");
-fpsTrack.style.position = "absolute";
-fpsTrack.style.left = "12px";
-fpsTrack.style.top = "12px";
-fpsTrack.style.padding = "4px 7px";
-fpsTrack.style.font = "600 11px/1.2 Space Grotesk, sans-serif";
-fpsTrack.style.letterSpacing = "0.02em";
-fpsTrack.style.color = "rgba(232,238,246,0.72)";
-fpsTrack.style.background = "rgba(8,10,14,0.32)";
-fpsTrack.style.border = "1px solid rgba(220,228,240,0.16)";
-fpsTrack.style.borderRadius = "8px";
-fpsTrack.style.pointerEvents = "none";
-fpsTrack.style.backdropFilter = "blur(4px)";
-fpsTrack.style.zIndex = "35";
-fpsTrack.textContent = "FPS --";
-root.appendChild(fpsTrack);
 
 const scene = new THREE.Scene();
 const lighting = addLighting(THREE, scene);
@@ -147,6 +132,16 @@ const overlay = createFileOverlayUI(uiRoot, {
       return null;
     }
     showToast(uvMapDataUrl ? "UV map applied." : "UV map cleared.");
+    return updated;
+  },
+  onAppendToFolder: async (pin, files) => {
+    if (!pin?.id) return null;
+    const updated = await uploadPins?.appendFilesToFolder?.(pin.id, files, null);
+    if (!updated) {
+      showToast("Could not add files to folder.");
+      return null;
+    }
+    showToast("Folder updated.");
     return updated;
   },
 });
@@ -310,6 +305,9 @@ const actions = createActionRegistry({
   },
   onDocumentSelf: async () => {
     if (inMaskSelection) return;
+    selfieCaptureOpen = true;
+    input.exitPointerLock();
+    triedInitialPointerLock = false;
     try {
       const imageDataUrl = await captureSelfie();
       if (!imageDataUrl) return;
@@ -322,6 +320,8 @@ const actions = createActionRegistry({
       });
     } catch {
       showToast("Webcam unavailable or permission denied.");
+    } finally {
+      selfieCaptureOpen = false;
     }
   },
   onGraffiti: () => {
@@ -329,14 +329,6 @@ const actions = createActionRegistry({
   },
   onBuild: () => {
     showToast("Build is disabled for now.");
-  },
-  onChangeMask: () => {
-    if (inMaskSelection) return;
-    actionMenu.close();
-    actionMenu.setVisible(false);
-    overlay.hide();
-    inMaskSelection = true;
-    maskSelection.show();
   },
   onSmoke: () => {
     if (inMaskSelection) return;
@@ -399,6 +391,7 @@ decorateInput.addEventListener("change", async () => {
 function shouldLockForNavigation() {
   if (useTouchControls) return false;
   if (inMaskSelection) return false;
+  if (selfieCaptureOpen) return false;
   if (uploadPins?.isDecoratingMode?.()) return false;
   if (actionMenu.isOpen() || overlay.isOpen() || colorPanel.isOpen() || filterPanel.isOpen()) return false;
   return true;
@@ -669,6 +662,7 @@ let draggingBuildShape = false;
 let inventoryItem = null;
 let inventoryThrowState = null;
 let suppressPaintUntilMouseUp = false;
+let selfieCaptureOpen = false;
 
 const worldRaycaster = new THREE.Raycaster();
 const worldNdc = new THREE.Vector2();
@@ -700,7 +694,6 @@ function animate() {
 
   if (fpsSampleTime >= AUTO_QUALITY_UPDATE_SECONDS) {
     const avgFps = fpsSampleAccumulator / fpsSampleTime;
-    fpsTrack.textContent = `FPS ${Math.round(avgFps)} · Q${autoQualityLevel}`;
     fpsSampleAccumulator = 0;
     fpsSampleTime = 0;
     if (qualityCooldown <= 0) {
@@ -738,7 +731,12 @@ function animate() {
     const isDecoratingMode = uploadPins.isDecoratingMode();
     decorateControls.setVisible(Boolean(isDecoratingMode));
     const uiLocksMovement =
-      isDecoratingMode || actionMenu.isOpen() || overlay.isOpen() || colorPanel.isOpen() || filterPanel.isOpen();
+      selfieCaptureOpen ||
+      isDecoratingMode ||
+      actionMenu.isOpen() ||
+      overlay.isOpen() ||
+      colorPanel.isOpen() ||
+      filterPanel.isOpen();
     player.update(delta, input, cameraRig.getYaw(), uiLocksMovement);
     const playerState = player.getState();
     playerSyncAccumulator += delta;
@@ -918,12 +916,14 @@ function serializeLocalPlayer(playerState) {
     },
     yaw: Number(playerState.yaw.toFixed(4)),
     grounded: Boolean(playerState.grounded),
+    smoking: Boolean(playerState.smoking),
   };
 }
 
 function shouldSendPlayerState(next, prev, nextMaskId, prevMaskId) {
   if (!prev) return true;
   if (nextMaskId !== prevMaskId) return true;
+  if (Boolean(next.smoking) !== Boolean(prev.smoking)) return true;
   const dx = next.position.x - prev.position.x;
   const dy = next.position.y - prev.position.y;
   const dz = next.position.z - prev.position.z;
@@ -1014,6 +1014,9 @@ function beginMobilePickupHold(touch) {
   if (!touch) return;
   if (inventoryItem || inventoryThrowState) return;
   if (overlay.isOpen() || actionMenu.isOpen() || inMaskSelection) return;
+  const ownerId = networkClient.clientId || null;
+  const canPickup = uploadPins.canPickupOwnedPinAtPointer(touch.clientX, touch.clientY, renderer.domElement, ownerId);
+  if (!canPickup) return;
   mobilePickupHold = {
     touchId: touch.identifier,
     clientX: touch.clientX,
@@ -1142,12 +1145,26 @@ function throwInventoryAtPointer(clientX, clientY) {
   projectileMesh.position.copy(throwStartScratch);
   scene.add(projectileMesh);
 
-  const trailGeometry = new THREE.BufferGeometry().setFromPoints([throwStartScratch, throwStartScratch]);
-  const trailLine = new THREE.Line(
-    trailGeometry,
-    new THREE.LineBasicMaterial({ color: 0xcde6ff, transparent: true, opacity: 0.82 })
-  );
-  scene.add(trailLine);
+  const trailGeometry = new THREE.SphereGeometry(1, 10, 8);
+  const trailMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe9f4ff,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.9,
+    roughness: 0.25,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.8,
+    depthWrite: false,
+  });
+  const trailGroup = new THREE.Group();
+  const trailSegments = [];
+  for (let i = 0; i < INVENTORY_THROW_MAX_TRAIL_POINTS; i += 1) {
+    const segment = new THREE.Mesh(trailGeometry, trailMaterial);
+    segment.visible = false;
+    trailGroup.add(segment);
+    trailSegments.push(segment);
+  }
+  scene.add(trailGroup);
 
   inventoryThrowState = {
     storedPin: inventoryItem,
@@ -1155,7 +1172,10 @@ function throwInventoryAtPointer(clientX, clientY) {
     velocity,
     age: 0,
     mesh: projectileMesh,
-    trailLine,
+    trailGroup,
+    trailSegments,
+    trailGeometry,
+    trailMaterial,
     trailPoints: [throwStartScratch.clone()],
     fallbackTarget: throwTargetScratch.clone(),
   };
@@ -1179,11 +1199,11 @@ function finishInventoryThrow(landingPoint) {
     showToast("Throw failed.");
   }
   scene.remove(state.mesh);
-  scene.remove(state.trailLine);
+  scene.remove(state.trailGroup);
   state.mesh.geometry?.dispose?.();
   state.mesh.material?.dispose?.();
-  state.trailLine.geometry?.dispose?.();
-  state.trailLine.material?.dispose?.();
+  state.trailGeometry?.dispose?.();
+  state.trailMaterial?.dispose?.();
   inventoryThrowState = null;
 }
 
@@ -1200,7 +1220,25 @@ function updateInventoryThrow(delta) {
   if (state.trailPoints.length > INVENTORY_THROW_MAX_TRAIL_POINTS) {
     state.trailPoints.splice(0, state.trailPoints.length - INVENTORY_THROW_MAX_TRAIL_POINTS);
   }
-  state.trailLine.geometry.setFromPoints(state.trailPoints);
+
+  const visibleCount = state.trailPoints.length;
+  const segmentCount = state.trailSegments.length;
+  for (let i = 0; i < segmentCount; i += 1) {
+    const segment = state.trailSegments[i];
+    const sourceIndex = i - (segmentCount - visibleCount);
+    if (sourceIndex < 0 || sourceIndex >= visibleCount) {
+      segment.visible = false;
+      continue;
+    }
+    const point = state.trailPoints[sourceIndex];
+    const t = sourceIndex / Math.max(1, visibleCount - 1);
+    const radius =
+      INVENTORY_THROW_TRAIL_TAIL_RADIUS +
+      (INVENTORY_THROW_TRAIL_HEAD_RADIUS - INVENTORY_THROW_TRAIL_TAIL_RADIUS) * t;
+    segment.visible = true;
+    segment.position.copy(point);
+    segment.scale.setScalar(radius);
+  }
 
   throwDirectionScratch.copy(state.position).sub(previous);
   const segmentLength = throwDirectionScratch.length();
@@ -1238,7 +1276,27 @@ function createRemoteAvatarRenderer(THREE, scene, masks) {
     maskHolder.position.set(0, 0.98, 0.37);
     root.add(maskHolder);
 
-    const avatar = { id, root, body, maskHolder, maskId: null };
+    const smokeAnchor = new THREE.Group();
+    smokeAnchor.position.set(0.08, 1.2, 0.47);
+    smokeAnchor.rotation.set(-0.08, -0.22, 0);
+    root.add(smokeAnchor);
+    const cigarette = createRemoteCigaretteModel(THREE);
+    cigarette.visible = false;
+    smokeAnchor.add(cigarette);
+
+    const avatar = {
+      id,
+      root,
+      body,
+      maskHolder,
+      maskId: null,
+      smoking: false,
+      smokeAnchor,
+      cigarette,
+      emberMaterial: cigarette.userData.emberMaterial || null,
+      emberGlow: cigarette.userData.emberGlow || null,
+      emberPhase: Math.random() * Math.PI * 2,
+    };
     scene.add(root);
     byId.set(id, avatar);
     return avatar;
@@ -1281,6 +1339,18 @@ function createRemoteAvatarRenderer(THREE, scene, masks) {
       avatar.root.position.set(state.position.x, state.position.y, state.position.z);
       avatar.root.rotation.y = state.yaw;
       setMask(avatar, state.maskId || null);
+      avatar.smoking = Boolean(state.smoking);
+      avatar.cigarette.visible = avatar.smoking;
+      if (avatar.smoking && avatar.emberMaterial && avatar.emberGlow) {
+        avatar.emberPhase += 0.18;
+        const flicker = 0.72 + Math.sin(avatar.emberPhase) * 0.2 + Math.sin(avatar.emberPhase * 2.5) * 0.08;
+        const glowStrength = Math.max(0.35, flicker);
+        avatar.emberMaterial.emissiveIntensity = 1.5 + glowStrength * 1.2;
+        avatar.emberGlow.intensity = 0.18 + glowStrength * 0.58;
+      } else if (avatar.emberMaterial && avatar.emberGlow) {
+        avatar.emberMaterial.emissiveIntensity = 2.1;
+        avatar.emberGlow.intensity = 0.45;
+      }
     }
 
     for (const [id, avatar] of byId.entries()) {
@@ -1289,6 +1359,45 @@ function createRemoteAvatarRenderer(THREE, scene, masks) {
   }
 
   return { sync };
+}
+
+function createRemoteCigaretteModel(THREE) {
+  const group = new THREE.Group();
+  const paper = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.02, 0.02, 0.26, 12),
+    new THREE.MeshStandardMaterial({ color: 0xe8e0d5, roughness: 0.86, metalness: 0.02 })
+  );
+  paper.rotation.z = Math.PI / 2;
+  group.add(paper);
+
+  const filter = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.021, 0.021, 0.075, 12),
+    new THREE.MeshStandardMaterial({ color: 0xc99456, roughness: 0.8, metalness: 0.04 })
+  );
+  filter.position.x = -0.095;
+  filter.rotation.z = Math.PI / 2;
+  group.add(filter);
+
+  const ember = new THREE.Mesh(
+    new THREE.SphereGeometry(0.017, 10, 10),
+    new THREE.MeshStandardMaterial({
+      color: 0xff8e38,
+      emissive: 0xaa2f10,
+      emissiveIntensity: 2.1,
+      roughness: 0.4,
+      metalness: 0,
+    })
+  );
+  ember.position.x = 0.13;
+  group.add(ember);
+
+  const emberGlow = new THREE.PointLight(0xff8a42, 0.45, 0.65, 2);
+  emberGlow.position.x = 0.13;
+  group.add(emberGlow);
+  group.scale.set(1.4, 1.4, 1.4);
+  group.userData.emberMaterial = ember.material;
+  group.userData.emberGlow = emberGlow;
+  return group;
 }
 
 function createDecorControlsUI(root, input) {

@@ -121,8 +121,10 @@ function sanitizeSave(raw) {
               name: String(entry.name || ""),
               mimeType: String(entry.mimeType || ""),
               size: clampNumber(entry.size, 0),
+              uploadedAt: String(entry.uploadedAt || ""),
               entryType: String(entry.entryType || ""),
               previewDataUrl: String(entry.previewDataUrl || ""),
+              dataUrl: String(entry.dataUrl || ""),
             }))
         : [],
     }))
