@@ -2,7 +2,7 @@ import * as THREE from "https://unpkg.com/three@0.180.0/build/three.module.js";
 import { MASK_OPTIONS } from "./config/masks.js?v=20260420af";
 import { createActionRegistry } from "./config/actions.js?v=20260420af";
 import { createPersistence, createDefaultSave } from "./core/persistence.js?v=20260420af";
-import { NetworkClient, RemoteAvatarStore } from "./core/network.js?v=20260420af";
+import { NetworkClient, RemoteAvatarStore } from "./core/network.js?v=20260420ah";
 import { createPlazaScene, addLighting } from "./game/plazaScene.js?v=20260420af";
 import { createInput } from "./game/input.js?v=20260420af";
 import { buildMasks } from "./game/maskFactory.js?v=20260420af";
@@ -188,7 +188,8 @@ const decorateControls = createDecorControlsUI(uiRoot, input);
 
 const touchJoystick = createTouchJoystickUI(uiRoot, {
   onAxis: (x, y) => {
-    input.setMoveAxis(x, y);
+    // Match keyboard strafe convention in player controller: A => +X, D => -X.
+    input.setMoveAxis(-x, y);
   },
   onTap: (x, y) => {
     handleMobileTap(x, y);

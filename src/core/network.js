@@ -174,7 +174,7 @@ function inferWsUrl() {
 
   if (protocol === "https:") {
     // Force a single authoritative production world endpoint so all clients (desktop/mobile) join the same instance.
-    return "wss://plaza.onrender.com/ws";
+    return "wss://plaza-4i8i.onrender.com/ws";
   }
   return `ws://${host || "127.0.0.1"}:8787`;
 }
