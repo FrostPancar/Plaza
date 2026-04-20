@@ -24,6 +24,7 @@ const PLAYER_SYNC_POS_EPS = 0.025;
 const PLAYER_SYNC_YAW_EPS = 0.02;
 const MOBILE_LOOK_SENSITIVITY = 1.15;
 const MOBILE_TAP_MAX_MOVE = 10;
+const MOBILE_TAP_INTERACT_MAX_MOVE = 24;
 const MOBILE_PICKUP_HOLD_SECONDS = 0.5;
 const INVENTORY_THROW_GRAVITY = 18;
 const INVENTORY_THROW_MAX_TIME = 3.2;
@@ -189,7 +190,7 @@ const decorateControls = createDecorControlsUI(uiRoot, input);
 const touchJoystick = createTouchJoystickUI(uiRoot, {
   onAxis: (x, y) => {
     // Match keyboard strafe convention in player controller: A => +X, D => -X.
-    input.setMoveAxis(-x, y);
+    input.setMoveAxis(x, y);
   },
   onTap: (x, y) => {
     handleMobileTap(x, y);
@@ -504,6 +505,7 @@ const mobileLookState = {
   startY: 0,
   lastX: 0,
   lastY: 0,
+  maxTravel: 0,
   moved: false,
 };
 
@@ -522,6 +524,7 @@ renderer.domElement.addEventListener(
     mobileLookState.startY = touch.clientY;
     mobileLookState.lastX = touch.clientX;
     mobileLookState.lastY = touch.clientY;
+    mobileLookState.maxTravel = 0;
     mobileLookState.moved = false;
     input.setPointerPosition(touch.clientX, touch.clientY);
     beginMobilePickupHold(touch);
@@ -542,9 +545,11 @@ renderer.domElement.addEventListener(
       mobileLookState.lastX = touch.clientX;
       mobileLookState.lastY = touch.clientY;
       input.setPointerPosition(touch.clientX, touch.clientY);
-      input.addLookDelta(dx * MOBILE_LOOK_SENSITIVITY, dy * MOBILE_LOOK_SENSITIVITY);
+      // Natural mobile pan: vertical drag matches native touch-scroll feel.
+      input.addLookDelta(dx * MOBILE_LOOK_SENSITIVITY, -dy * MOBILE_LOOK_SENSITIVITY);
+      const travel = Math.hypot(touch.clientX - mobileLookState.startX, touch.clientY - mobileLookState.startY);
+      if (travel > mobileLookState.maxTravel) mobileLookState.maxTravel = travel;
       if (!mobileLookState.moved) {
-        const travel = Math.hypot(touch.clientX - mobileLookState.startX, touch.clientY - mobileLookState.startY);
         if (travel > MOBILE_TAP_MAX_MOVE) {
           mobileLookState.moved = true;
           cancelMobilePickupHold(touch.identifier);
@@ -565,7 +570,9 @@ renderer.domElement.addEventListener(
     for (const touch of event.changedTouches) {
       if (touch.identifier !== mobileLookState.touchId) continue;
       input.setPointerPosition(touch.clientX, touch.clientY);
-      const wasTap = !mobileLookState.moved;
+      const endTravel = Math.hypot(touch.clientX - mobileLookState.startX, touch.clientY - mobileLookState.startY);
+      const totalTravel = Math.max(mobileLookState.maxTravel, endTravel);
+      const wasTap = totalTravel <= MOBILE_TAP_INTERACT_MAX_MOVE;
       const holdConsumedTap = Boolean(
         mobilePickupHold &&
           mobilePickupHold.touchId === touch.identifier &&
@@ -573,6 +580,7 @@ renderer.domElement.addEventListener(
       );
       clearMobilePickupHold(touch.identifier);
       mobileLookState.touchId = null;
+      mobileLookState.maxTravel = 0;
       mobileLookState.moved = false;
       if (holdConsumedTap) return;
       if (!wasTap) return;
@@ -592,6 +600,7 @@ renderer.domElement.addEventListener(
     if (touch) clearMobilePickupHold(touch.identifier);
     else clearMobilePickupHold();
     mobileLookState.touchId = null;
+    mobileLookState.maxTravel = 0;
     mobileLookState.moved = false;
   },
   { passive: true }

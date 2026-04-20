@@ -134,8 +134,8 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
     if (!isActionMenuOpen) {
       if (input.isDown("KeyW")) desired.z -= 1;
       if (input.isDown("KeyS")) desired.z += 1;
-      if (input.isDown("KeyA")) desired.x += 1;
-      if (input.isDown("KeyD")) desired.x -= 1;
+      if (input.isDown("KeyA")) desired.x -= 1;
+      if (input.isDown("KeyD")) desired.x += 1;
     }
 
     const running = shiftDown;
