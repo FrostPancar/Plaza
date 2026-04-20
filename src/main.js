@@ -8,7 +8,7 @@ import { createInput } from "./game/input.js?v=20260420af";
 import { buildMasks } from "./game/maskFactory.js?v=20260420af";
 import { createPlayerController } from "./game/player.js?v=20260420af";
 import { createThirdPersonCameraRig } from "./game/cameraRig.js?v=20260420af";
-import { createUploadPinManager } from "./game/uploadPins.js?v=20260420af";
+import { createUploadPinManager } from "./game/uploadPins.js?v=20260420ag";
 import { createMaskSelectionUI } from "./ui/maskSelection.js?v=20260420af";
 import { createActionMenuUI } from "./ui/actionMenu.js?v=20260420af";
 import { createFileOverlayUI } from "./ui/fileOverlay.js?v=20260420af";
@@ -1119,6 +1119,10 @@ function pickupInventoryAtPointer(clientX, clientY) {
   const ownerId = networkClient.clientId || null;
   const picked = uploadPins.pickupOwnedPinAtPointer(clientX, clientY, renderer.domElement, ownerId);
   if (!picked) return false;
+  if (String(picked.fileType || "") === "decorate") {
+    showToast("Decor items are edited in place.");
+    return false;
+  }
   overlay.hide();
   inventoryItem = picked;
   syncInventorySlot();

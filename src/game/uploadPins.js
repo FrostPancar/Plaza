@@ -2196,7 +2196,7 @@ export function createUploadPinManager({
   function placeStoredPin(storedPin, targetPosition, requesterOwnerId = null) {
     if (!storedPin || typeof storedPin !== "object") return null;
     const fileType = String(storedPin.fileType || "");
-    if (!fileType || fileType === "graffiti") return null;
+    if (!fileType || fileType === "graffiti" || fileType === "decorate") return null;
     if (!canRequesterControlOwner(String(storedPin.ownerId || ""), requesterOwnerId)) return null;
 
     const owner = getOwnerIdentity?.() || {};
