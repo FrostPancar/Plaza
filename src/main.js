@@ -1,21 +1,21 @@
 import * as THREE from "https://unpkg.com/three@0.180.0/build/three.module.js";
-import { MASK_OPTIONS } from "./config/masks.js?v=20260420af";
-import { createActionRegistry } from "./config/actions.js?v=20260420af";
-import { createPersistence, createDefaultSave } from "./core/persistence.js?v=20260420af";
-import { NetworkClient, RemoteAvatarStore } from "./core/network.js?v=20260420ah";
-import { createPlazaScene, addLighting } from "./game/plazaScene.js?v=20260420af";
-import { createInput } from "./game/input.js?v=20260420af";
-import { buildMasks } from "./game/maskFactory.js?v=20260420af";
-import { createPlayerController } from "./game/player.js?v=20260420af";
-import { createThirdPersonCameraRig } from "./game/cameraRig.js?v=20260420af";
-import { createUploadPinManager } from "./game/uploadPins.js?v=20260420ag";
-import { createMaskSelectionUI } from "./ui/maskSelection.js?v=20260420af";
-import { createActionMenuUI } from "./ui/actionMenu.js?v=20260420af";
-import { createFileOverlayUI } from "./ui/fileOverlay.js?v=20260420af";
-import { createGraffitiPaletteUI } from "./ui/graffitiPalette.js?v=20260420af";
-import { createColorPanelUI, createFilterPanelUI } from "./ui/environmentPanels.js?v=20260420af";
-import { createTouchJoystickUI } from "./ui/touchJoystick.js?v=20260420af";
-import { captureSelfie } from "./ui/cameraCapture.js?v=20260420af";
+import { MASK_OPTIONS } from "./config/masks.js?v=20260421d";
+import { createActionRegistry } from "./config/actions.js?v=20260421d";
+import { createPersistence, createDefaultSave } from "./core/persistence.js?v=20260421d";
+import { NetworkClient, RemoteAvatarStore } from "./core/network.js?v=20260421d";
+import { createPlazaScene, addLighting } from "./game/plazaScene.js?v=20260421d";
+import { createInput } from "./game/input.js?v=20260421d";
+import { buildMasks } from "./game/maskFactory.js?v=20260421d";
+import { createPlayerController } from "./game/player.js?v=20260421d";
+import { createThirdPersonCameraRig } from "./game/cameraRig.js?v=20260421d";
+import { createUploadPinManager } from "./game/uploadPins.js?v=20260421d";
+import { createMaskSelectionUI } from "./ui/maskSelection.js?v=20260421d";
+import { createActionMenuUI } from "./ui/actionMenu.js?v=20260421d";
+import { createFileOverlayUI } from "./ui/fileOverlay.js?v=20260421d";
+import { createGraffitiPaletteUI } from "./ui/graffitiPalette.js?v=20260421d";
+import { createColorPanelUI, createFilterPanelUI } from "./ui/environmentPanels.js?v=20260421d";
+import { createTouchJoystickUI } from "./ui/touchJoystick.js?v=20260421d";
+import { captureSelfie } from "./ui/cameraCapture.js?v=20260421d";
 
 const GRAFFITI_COLORS = ["#ff4d4d", "#2f74ff", "#1fbf6d", "#f4b400"];
 const REMOTE_AVATAR_VISIBILITY_RADIUS = 56;
@@ -37,6 +37,7 @@ const AUTO_QUALITY_DOWN_FPS = 48;
 const AUTO_QUALITY_UP_FPS = 57;
 const AUTO_QUALITY_SCALES = [1, 0.88, 0.76, 0.64];
 const TRUSTED_DEVICE_KEY = "plaza.trustedDevice.v1";
+const CONTROL_DEBUG_PARAM = "controlsDebug";
 
 const root = document.getElementById("game-root");
 const uiRoot = document.getElementById("ui-root");
@@ -114,6 +115,14 @@ if (trustDeviceParam === "1") {
 const isTouchDevice = "ontouchstart" in window || navigator.maxTouchPoints > 0;
 const hasLikelyHardwareKeyboard = window.matchMedia?.("(hover: hover) and (pointer: fine)")?.matches ?? true;
 const useTouchControls = isTouchDevice && !hasLikelyHardwareKeyboard;
+const controlsProfile = createControlsProfile({
+  lookMode: "fps_standard",
+  movementMode: "wasd_standard",
+});
+input.setControlsProfile(controlsProfile);
+const showControlsDebug =
+  isLocalhostHost && (urlParams.get(CONTROL_DEBUG_PARAM) === "1" || urlParams.get(CONTROL_DEBUG_PARAM) === "true");
+const controlsDebugHud = createControlsDebugHud(uiRoot, showControlsDebug);
 
 let uploadPins;
 const overlay = createFileOverlayUI(uiRoot, {
@@ -189,8 +198,8 @@ const decorateControls = createDecorControlsUI(uiRoot, input);
 
 const touchJoystick = createTouchJoystickUI(uiRoot, {
   onAxis: (x, y) => {
-    // Match keyboard strafe convention in player controller: A => +X, D => -X.
-    input.setMoveAxis(x, y);
+    const move = mapMoveAxis(x, y, controlsProfile);
+    input.setMoveAxis(move.x, move.y);
   },
   onTap: (x, y) => {
     handleMobileTap(x, y);
@@ -545,7 +554,6 @@ renderer.domElement.addEventListener(
       mobileLookState.lastX = touch.clientX;
       mobileLookState.lastY = touch.clientY;
       input.setPointerPosition(touch.clientX, touch.clientY);
-      // Natural mobile look: swipe right => look right, swipe up => look up.
       input.addLookDelta(dx * MOBILE_LOOK_SENSITIVITY, dy * MOBILE_LOOK_SENSITIVITY);
       const travel = Math.hypot(touch.clientX - mobileLookState.startX, touch.clientY - mobileLookState.startY);
       if (travel > mobileLookState.maxTravel) mobileLookState.maxTravel = travel;
@@ -797,6 +805,20 @@ function animate() {
       if (decorateState === "deleted") showToast("Decor deleted.");
     } else {
       cameraRig.update(delta, input, player.object, playerState, uiLocksMovement);
+      if (showControlsDebug) {
+        const look = input.getLookDebugSnapshot?.() || { rawX: 0, rawY: 0, transformedX: 0, transformedY: 0, source: "n/a" };
+        const cam = cameraRig.getState();
+        controlsDebugHud.update({
+          source: look.source,
+          rawX: look.rawX,
+          rawY: look.rawY,
+          transformedX: look.transformedX,
+          transformedY: look.transformedY,
+          yaw: cam.cameraYaw,
+          pitch: cam.cameraPitch,
+          mode: controlsProfile.lookMode,
+        });
+      }
     }
 
     if (!useTouchControls && !uiLocksMovement && !input.isPointerLocked() && !triedInitialPointerLock) {
@@ -1535,6 +1557,68 @@ function createDecorControlsUI(root, input) {
         input.setVirtualKey("ArrowUp", false);
         input.setVirtualKey("ArrowDown", false);
       }
+    },
+  };
+}
+
+function createControlsProfile({ lookMode = "fps_standard", movementMode = "wasd_standard" } = {}) {
+  const mode = String(lookMode || "fps_standard").toLowerCase();
+  const moveMode = String(movementMode || "wasd_standard").toLowerCase();
+  const profile = {
+    lookMode: mode === "natural_pan" ? "natural_pan" : "fps_standard",
+    movementMode: moveMode === "wasd_standard" ? "wasd_standard" : "wasd_standard",
+    invertLookX: false,
+    invertLookY: false,
+  };
+  if (profile.lookMode === "natural_pan") {
+    profile.invertLookX = true;
+    profile.invertLookY = true;
+  }
+  return profile;
+}
+
+function mapMoveAxis(x, y, profile) {
+  const safeX = Number.isFinite(x) ? x : 0;
+  const safeY = Number.isFinite(y) ? y : 0;
+  if (profile?.movementMode !== "wasd_standard") return { x: safeX, y: safeY };
+  return { x: safeX, y: safeY };
+}
+
+function createControlsDebugHud(root, visible) {
+  const panel = document.createElement("div");
+  panel.style.position = "absolute";
+  panel.style.right = "12px";
+  panel.style.bottom = "12px";
+  panel.style.padding = "8px 10px";
+  panel.style.borderRadius = "8px";
+  panel.style.background = "rgba(12,18,27,0.82)";
+  panel.style.color = "#d9ecff";
+  panel.style.font = "12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace";
+  panel.style.whiteSpace = "pre";
+  panel.style.zIndex = "120";
+  panel.style.pointerEvents = "none";
+  panel.style.border = "1px solid rgba(163, 210, 255, 0.28)";
+  panel.style.display = visible ? "block" : "none";
+  root.appendChild(panel);
+
+  return {
+    update({
+      source = "n/a",
+      rawX = 0,
+      rawY = 0,
+      transformedX = 0,
+      transformedY = 0,
+      yaw = 0,
+      pitch = 0,
+      mode = "fps_standard",
+    }) {
+      if (!visible) return;
+      panel.textContent =
+`controls: ${mode}
+src: ${source}
+raw: ${rawX.toFixed(2)}, ${rawY.toFixed(2)}
+look: ${transformedX.toFixed(2)}, ${transformedY.toFixed(2)}
+yaw/pitch: ${yaw.toFixed(3)}, ${pitch.toFixed(3)}`;
     },
   };
 }

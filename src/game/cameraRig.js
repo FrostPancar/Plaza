@@ -32,9 +32,10 @@ export function createThirdPersonCameraRig(THREE, camera, initial = {}) {
     const origin = playerObject.position.clone();
     origin.y += state.eyeHeight;
 
+    // FPS convention: yaw 0 looks toward -Z.
     const dirX = Math.sin(state.yaw) * Math.cos(state.pitch);
     const dirY = Math.sin(state.pitch);
-    const dirZ = Math.cos(state.yaw) * Math.cos(state.pitch);
+    const dirZ = -Math.cos(state.yaw) * Math.cos(state.pitch);
 
     camera.position.copy(origin);
     lookTarget.set(origin.x + dirX, origin.y + dirY, origin.z + dirZ);

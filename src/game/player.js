@@ -125,17 +125,19 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
     prevWDown = wDown;
 
     desired.set(0, 0, 0);
+    let strafe = 0;
+    let forward = 0;
     const moveAxis = input.getMoveAxis ? input.getMoveAxis() : { x: 0, y: 0 };
     if (!isActionMenuOpen && (Math.abs(moveAxis.x) > 0.05 || Math.abs(moveAxis.y) > 0.05)) {
-      desired.x += moveAxis.x;
-      desired.z -= moveAxis.y;
+      strafe += moveAxis.x;
+      forward += moveAxis.y;
     }
 
     if (!isActionMenuOpen) {
-      if (input.isDown("KeyW")) desired.z -= 1;
-      if (input.isDown("KeyS")) desired.z += 1;
-      if (input.isDown("KeyA")) desired.x -= 1;
-      if (input.isDown("KeyD")) desired.x += 1;
+      if (input.isDown("KeyW")) forward += 1;
+      if (input.isDown("KeyS")) forward -= 1;
+      if (input.isDown("KeyA")) strafe -= 1;
+      if (input.isDown("KeyD")) strafe += 1;
     }
 
     const running = shiftDown;
@@ -144,14 +146,18 @@ export function createPlayerController(THREE, scene, spawn, selectedMask) {
       ? config.flySpeed * flyMultiplier
       : config.moveSpeed * (running ? config.runMultiplier : 1);
 
-    if (desired.lengthSq() > 0) {
-      desired.normalize();
-      // Align movement with FPS camera forward (+Z at yaw 0).
-      const moveYaw = Math.atan2(desired.x, -desired.z) + cameraYaw;
-      const targetVX = Math.sin(moveYaw) * speed;
-      const targetVZ = Math.cos(moveYaw) * speed;
-      desired.set(targetVX, 0, targetVZ);
+    const inputLen = Math.hypot(strafe, forward);
+    if (inputLen > 0) {
+      const normStrafe = strafe / inputLen;
+      const normForward = forward / inputLen;
+      const sinYaw = Math.sin(cameraYaw);
+      const cosYaw = Math.cos(cameraYaw);
+      // Camera-relative basis for FPS convention (forward toward -Z at yaw 0).
+      const worldX = normStrafe * cosYaw + normForward * sinYaw;
+      const worldZ = normStrafe * sinYaw - normForward * cosYaw;
+      desired.set(worldX * speed, 0, worldZ * speed);
 
+      const moveYaw = Math.atan2(worldX, -worldZ);
       const turnAlpha = 1 - Math.exp(-config.turnSmoothing * delta);
       root.rotation.y = lerpAngle(root.rotation.y, moveYaw, turnAlpha);
     } else {

@@ -12,6 +12,32 @@ export function createInput() {
     deltaX: 0,
     deltaY: 0,
   };
+  const lookProfile = {
+    lookMode: "fps_standard",
+    invertLookX: false,
+    invertLookY: false,
+    movementMode: "wasd_standard",
+  };
+  const lookDebug = {
+    source: "none",
+    rawX: 0,
+    rawY: 0,
+    transformedX: 0,
+    transformedY: 0,
+  };
+
+  function applyLookTransform(rawX, rawY, source) {
+    const safeRawX = Number.isFinite(rawX) ? rawX : 0;
+    const safeRawY = Number.isFinite(rawY) ? rawY : 0;
+    const transformedX = lookProfile.invertLookX ? -safeRawX : safeRawX;
+    const transformedY = lookProfile.invertLookY ? -safeRawY : safeRawY;
+    lookDebug.source = source || "unknown";
+    lookDebug.rawX = safeRawX;
+    lookDebug.rawY = safeRawY;
+    lookDebug.transformedX = transformedX;
+    lookDebug.transformedY = transformedY;
+    return { x: transformedX, y: transformedY };
+  }
 
   function keydown(event) {
     keys.add(event.code);
@@ -33,8 +59,9 @@ export function createInput() {
     mouse.x = event.clientX;
     mouse.y = event.clientY;
     if (hasPointerLockApi && !hiddenMode) return;
-    mouse.deltaX += event.movementX || 0;
-    mouse.deltaY += event.movementY || 0;
+    const look = applyLookTransform(event.movementX || 0, event.movementY || 0, "mouse");
+    mouse.deltaX += look.x;
+    mouse.deltaY += look.y;
   }
 
   function syncPointerLockState() {
@@ -116,10 +143,21 @@ export function createInput() {
       moveAxis.x = Number.isFinite(x) ? x : 0;
       moveAxis.y = Number.isFinite(y) ? y : 0;
     },
-    addLookDelta: (dx, dy) => {
-      if (Number.isFinite(dx)) mouse.deltaX += dx;
-      if (Number.isFinite(dy)) mouse.deltaY += dy;
+    setControlsProfile: (profile = {}) => {
+      if (profile && typeof profile === "object") {
+        lookProfile.lookMode = String(profile.lookMode || lookProfile.lookMode);
+        lookProfile.movementMode = String(profile.movementMode || lookProfile.movementMode);
+        lookProfile.invertLookX = Boolean(profile.invertLookX);
+        lookProfile.invertLookY = Boolean(profile.invertLookY);
+      }
     },
+    getControlsProfile: () => ({ ...lookProfile }),
+    addLookDelta: (dx, dy) => {
+      const look = applyLookTransform(dx, dy, "touch");
+      mouse.deltaX += look.x;
+      mouse.deltaY += look.y;
+    },
+    getLookDebugSnapshot: () => ({ ...lookDebug }),
     setPointerPosition: (x, y) => {
       if (Number.isFinite(x)) mouse.x = x;
       if (Number.isFinite(y)) mouse.y = y;
