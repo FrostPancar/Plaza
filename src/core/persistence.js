@@ -92,6 +92,7 @@ function sanitizeSave(raw) {
       mimeType: String(item.mimeType || "application/octet-stream"),
       size: clampNumber(item.size, 0),
       dataUrl: String(item.dataUrl || ""),
+      previewDataUrl: String(item.previewDataUrl || ""),
       externalData: Boolean(item.externalData),
       graffitiLayers: Array.isArray(item.graffitiLayers)
         ? item.graffitiLayers

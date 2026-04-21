@@ -10,6 +10,8 @@ const MEDIA_PREVIEW_ACTIVE_DISTANCE = 28;
 const MODEL_DEFAULT_COLOR = "#cad9f7";
 const AIM_RAYCAST_INTERVAL = 1 / 24;
 let mediaSourceHost = null;
+let pdfJsModulePromise = null;
+let jsZipModulePromise = null;
 
 const SUPPORTED_TYPES = {
   "audio/mpeg": "audio",
@@ -26,6 +28,7 @@ const SUPPORTED_TYPES = {
   "text/csv": "csv",
   "text/markdown": "md",
   "application/json": "json",
+  "application/epub+zip": "epub",
   "application/zip": "zip",
   "application/x-zip-compressed": "zip",
   "application/x-rar-compressed": "rar",
@@ -62,6 +65,7 @@ function getFileType(file) {
   if (name.endsWith(".csv")) return "csv";
   if (name.endsWith(".md")) return "md";
   if (name.endsWith(".json")) return "json";
+  if (name.endsWith(".epub")) return "epub";
   if (name.endsWith(".zip")) return "zip";
   if (name.endsWith(".rar")) return "rar";
   if (name.endsWith(".7z")) return "7z";
@@ -278,6 +282,209 @@ async function readImageThumbnailDataUrl(file, maxEdge = 280) {
     img.onerror = () => resolve(source);
     img.src = source;
   });
+}
+
+function readAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Unable to read file buffer."));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function loadPdfJsModule() {
+  if (!pdfJsModulePromise) {
+    pdfJsModulePromise = import("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.min.mjs")
+      .then((module) => {
+        const lib = module?.default || module;
+        if (lib?.GlobalWorkerOptions) {
+          lib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.worker.min.mjs";
+        }
+        return lib;
+      })
+      .catch(() => null);
+  }
+  return pdfJsModulePromise;
+}
+
+async function loadJsZipModule() {
+  if (!jsZipModulePromise) {
+    jsZipModulePromise = import("https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm")
+      .then((module) => module?.default || module)
+      .catch(() => null);
+  }
+  return jsZipModulePromise;
+}
+
+function scaleImageToThumbDataUrlFromUrl(url, maxEdge = 320) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const srcW = Math.max(1, img.naturalWidth || img.width || 1);
+      const srcH = Math.max(1, img.naturalHeight || img.height || 1);
+      const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+      const outW = Math.max(1, Math.round(srcW * scale));
+      const outH = Math.max(1, Math.round(srcH * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, outW, outH);
+      ctx.drawImage(img, 0, 0, outW, outH);
+      resolve(canvas.toDataURL("image/jpeg", 0.84));
+    };
+    img.onerror = () => reject(new Error("Image decode failed."));
+    img.src = url;
+  });
+}
+
+async function readPdfFirstPageThumbnailDataUrl(file, maxEdge = 320) {
+  const pdfjs = await loadPdfJsModule();
+  if (!pdfjs?.getDocument) return "";
+  const raw = await readAsArrayBuffer(file);
+  const task = pdfjs.getDocument({ data: raw });
+  const pdf = await task.promise;
+  const page = await pdf.getPage(1);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(1.8, Math.max(0.2, maxEdge / Math.max(baseViewport.width, baseViewport.height)));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(viewport.width));
+  canvas.height = Math.max(1, Math.round(viewport.height));
+  const ctx = canvas.getContext("2d", { alpha: false });
+  await page.render({ canvasContext: ctx, viewport }).promise;
+  page.cleanup?.();
+  pdf.cleanup?.();
+  pdf.destroy?.();
+  return canvas.toDataURL("image/jpeg", 0.84);
+}
+
+function parseXmlText(xmlText) {
+  if (!xmlText) return null;
+  try {
+    return new DOMParser().parseFromString(xmlText, "application/xml");
+  } catch {
+    return null;
+  }
+}
+
+function normalizeZipPath(path) {
+  return String(path || "").replace(/^\/+/, "").replace(/\\/g, "/");
+}
+
+function joinZipPath(baseDir, target) {
+  const safeTarget = normalizeZipPath(target);
+  if (!safeTarget) return "";
+  if (!baseDir) return safeTarget;
+  if (safeTarget.startsWith(baseDir)) return safeTarget;
+  const parts = `${baseDir}/${safeTarget}`.split("/").filter(Boolean);
+  const stack = [];
+  for (const part of parts) {
+    if (part === ".") continue;
+    if (part === "..") {
+      if (stack.length) stack.pop();
+      continue;
+    }
+    stack.push(part);
+  }
+  return stack.join("/");
+}
+
+function findZipFile(zip, path) {
+  const direct = zip.file(path);
+  if (direct) return direct;
+  const decoded = decodeURIComponent(path);
+  if (decoded !== path) return zip.file(decoded) || null;
+  return null;
+}
+
+async function readEpubCoverThumbnailDataUrl(file, maxEdge = 320) {
+  const JSZip = await loadJsZipModule();
+  if (!JSZip?.loadAsync) return "";
+  const raw = await readAsArrayBuffer(file);
+  const zip = await JSZip.loadAsync(raw);
+
+  let opfPath = "";
+  const containerFile = findZipFile(zip, "META-INF/container.xml");
+  if (containerFile) {
+    const containerXml = await containerFile.async("text");
+    const containerDoc = parseXmlText(containerXml);
+    const rootfileNode = containerDoc?.querySelector("rootfile");
+    opfPath = normalizeZipPath(rootfileNode?.getAttribute("full-path") || "");
+  }
+
+  let imagePath = "";
+  if (opfPath) {
+    const opfFile = findZipFile(zip, opfPath);
+    if (opfFile) {
+      const opfXml = await opfFile.async("text");
+      const opfDoc = parseXmlText(opfXml);
+      const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/")) : "";
+      const manifestItems = Array.from(opfDoc?.querySelectorAll("manifest > item") || []);
+      const byId = new Map();
+      for (const item of manifestItems) {
+        const id = String(item.getAttribute("id") || "");
+        if (id) byId.set(id, item);
+      }
+
+      const coverMetaId =
+        opfDoc?.querySelector('metadata > meta[name="cover"]')?.getAttribute("content") ||
+        opfDoc?.querySelector('metadata > meta[property="cover-image"]')?.textContent ||
+        "";
+      const directCover = byId.get(String(coverMetaId || "").trim());
+      if (directCover) {
+        imagePath = joinZipPath(opfDir, directCover.getAttribute("href") || "");
+      }
+
+      if (!imagePath) {
+        const propCover = manifestItems.find((item) => /\bcover-image\b/i.test(String(item.getAttribute("properties") || "")));
+        if (propCover) imagePath = joinZipPath(opfDir, propCover.getAttribute("href") || "");
+      }
+
+      if (!imagePath) {
+        const namedCover = manifestItems.find((item) => {
+          const href = String(item.getAttribute("href") || "");
+          const mediaType = String(item.getAttribute("media-type") || "");
+          return /cover/i.test(href) && mediaType.startsWith("image/");
+        });
+        if (namedCover) imagePath = joinZipPath(opfDir, namedCover.getAttribute("href") || "");
+      }
+
+      if (!imagePath) {
+        const firstImage = manifestItems.find((item) => String(item.getAttribute("media-type") || "").startsWith("image/"));
+        if (firstImage) imagePath = joinZipPath(opfDir, firstImage.getAttribute("href") || "");
+      }
+    }
+  }
+
+  if (!imagePath) {
+    const firstImageKey = Object.keys(zip.files).find((key) => /\.(png|jpe?g|webp|gif|avif)$/i.test(key));
+    imagePath = normalizeZipPath(firstImageKey || "");
+  }
+  if (!imagePath) return "";
+
+  const imageFile = findZipFile(zip, imagePath);
+  if (!imageFile) return "";
+  const blob = await imageFile.async("blob");
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    return await scaleImageToThumbDataUrlFromUrl(objectUrl, maxEdge);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function createPreviewDataUrlForFile(file, fileType, maxEdge = 320) {
+  const type = String(fileType || "").toLowerCase();
+  try {
+    if (type === "image") return await readImageThumbnailDataUrl(file, maxEdge);
+    if (type === "pdf") return await readPdfFirstPageThumbnailDataUrl(file, maxEdge);
+    if (type === "epub") return await readEpubCoverThumbnailDataUrl(file, maxEdge);
+  } catch {
+    return "";
+  }
+  return "";
 }
 
 function createIconCanvas(label, bg, fg) {
@@ -525,6 +732,7 @@ function createDocumentThumbnailTexture(THREE, kind, fileName, width = 612, heig
     CSV: "#1f7b58",
     MD: "#5a6472",
     JSON: "#50697f",
+    EPUB: "#5b3f8a",
     CODE: "#47537f",
   };
   const accent = accentByKind[safeKind] || "#a12d2d";
@@ -617,7 +825,11 @@ function createCodeThumbnailTexture(THREE, fileName, width = 612, height = 792, 
   return createDocumentThumbnailTexture(THREE, "CODE", fileName, width, height, radius);
 }
 
-const DOCUMENT_THUMB_TYPES = new Set(["pdf", "docx", "txt", "pptx", "xlsx", "csv", "md", "json", "js", "ts", "py"]);
+function createEpubThumbnailTexture(THREE, fileName, width = 612, height = 792, radius = 38) {
+  return createDocumentThumbnailTexture(THREE, "EPUB", fileName, width, height, radius);
+}
+
+const DOCUMENT_THUMB_TYPES = new Set(["pdf", "docx", "txt", "pptx", "xlsx", "csv", "md", "json", "js", "ts", "py", "epub"]);
 
 function createDocumentTypeTexture(THREE, fileType, fileName, width = 612, height = 792, radius = 38) {
   if (fileType === "pdf") return createPdfThumbnailTexture(THREE, fileName, width, height, radius);
@@ -628,6 +840,7 @@ function createDocumentTypeTexture(THREE, fileType, fileName, width = 612, heigh
   if (fileType === "csv") return createCsvThumbnailTexture(THREE, fileName, width, height, radius);
   if (fileType === "md") return createMdThumbnailTexture(THREE, fileName, width, height, radius);
   if (fileType === "json") return createJsonThumbnailTexture(THREE, fileName, width, height, radius);
+  if (fileType === "epub") return createEpubThumbnailTexture(THREE, fileName, width, height, radius);
   if (fileType === "js" || fileType === "ts" || fileType === "py") {
     return createCodeThumbnailTexture(THREE, fileName, width, height, radius);
   }
@@ -643,6 +856,7 @@ function pinTypeToIcon(pinType) {
   if (pinType === "csv") return { text: "CSV", bg: "#1f7b58", fg: "#e8fff4" };
   if (pinType === "md") return { text: "MD", bg: "#5a6472", fg: "#eef2fa" };
   if (pinType === "json") return { text: "JSON", bg: "#50697f", fg: "#e9f2ff" };
+  if (pinType === "epub") return { text: "EPUB", bg: "#5b3f8a", fg: "#f2e8ff" };
   if (pinType === "txt") return { text: "TXT", bg: "#42614a", fg: "#e8fff0" };
   if (pinType === "zip") return { text: "ZIP", bg: "#5a4a2f", fg: "#fff3df" };
   if (pinType === "rar") return { text: "RAR", bg: "#59407b", fg: "#f0e6ff" };
@@ -695,6 +909,7 @@ function inferFolderEntryType(name, mimeType) {
   if (safeMime === "text/csv" || /\.csv$/.test(safeName)) return "csv";
   if (safeMime === "text/markdown" || /\.md$/.test(safeName)) return "md";
   if (safeMime === "application/json" || /\.json$/.test(safeName)) return "json";
+  if (safeMime === "application/epub+zip" || /\.epub$/.test(safeName)) return "epub";
   if (/\.js$/.test(safeName)) return "js";
   if (/\.ts$/.test(safeName)) return "ts";
   if (/\.py$/.test(safeName)) return "py";
@@ -724,6 +939,7 @@ function folderEntryIcon(entryType) {
   if (entryType === "csv") return { text: "CSV", bg: "#1f7b58", fg: "#e8fff4" };
   if (entryType === "md") return { text: "MD", bg: "#5a6472", fg: "#eef2fa" };
   if (entryType === "json") return { text: "JSON", bg: "#50697f", fg: "#e9f2ff" };
+  if (entryType === "epub") return { text: "EPUB", bg: "#5b3f8a", fg: "#f2e8ff" };
   if (entryType === "js") return { text: "JS", bg: "#7a6b1f", fg: "#fff9de" };
   if (entryType === "ts") return { text: "TS", bg: "#2a4f8a", fg: "#e3ecff" };
   if (entryType === "py") return { text: "PY", bg: "#3d5f4f", fg: "#e9fff3" };
@@ -747,6 +963,7 @@ function folderEntrySortRank(entryType) {
   if (type === "video") return 1;
   if (type === "audio") return 2;
   if (type === "pdf") return 3;
+  if (type === "epub") return 3;
   if (type === "docx" || type === "txt" || type === "pptx" || type === "xlsx" || type === "csv") return 3;
   if (type === "md" || type === "json" || type === "js" || type === "ts" || type === "py") return 3;
   if (type === "model") return 4;
@@ -1147,6 +1364,7 @@ export function createUploadPinManager({
       mimeType: pin.mimeType,
       size: pin.size,
       dataUrl: pin.dataUrl,
+      previewDataUrl: String(pin.previewDataUrl || ""),
       position: pin.position,
       radius: pin.radius,
       createdAt: pin.createdAt,
@@ -1267,7 +1485,10 @@ export function createUploadPinManager({
       );
       shadowRadius = 0.78;
     } else if (DOCUMENT_THUMB_TYPES.has(data.fileType)) {
-      const documentTexture = createDocumentTypeTexture(THREE, data.fileType, data.fileName);
+      const usePreviewImage = Boolean(data.previewDataUrl && (data.fileType === "pdf" || data.fileType === "epub"));
+      const documentTexture = usePreviewImage
+        ? createRoundedImageTexture(THREE, imageLoader, data.previewDataUrl, 512, 672, 32)
+        : createDocumentTypeTexture(THREE, data.fileType, data.fileName);
       textureRef = documentTexture;
       textureAspect = documentTexture?.userData?.aspect || 0.77;
       iconMesh = new THREE.Mesh(
@@ -1557,6 +1778,7 @@ export function createUploadPinManager({
       modelHoverPhase: Math.random() * Math.PI * 2,
       modelColor: isModelPin ? normalizeHexColor(data.modelColor, MODEL_DEFAULT_COLOR) : null,
       modelUvMapDataUrl: isModelPin ? String(data.modelUvMapDataUrl || "") : "",
+      previewDataUrl: String(data.previewDataUrl || ""),
       modelUvTexture: null,
       folderPanelMeshes,
       folderPanelShadowMeshes,
@@ -1660,6 +1882,7 @@ export function createUploadPinManager({
 
     try {
       const dataUrl = await readAsDataUrl(file);
+      const previewDataUrl = await createPreviewDataUrlForFile(file, fileType, 360);
       const owner = getOwnerIdentity?.() || {};
       const pin = spawnPin({
         id: uid(),
@@ -1670,6 +1893,7 @@ export function createUploadPinManager({
         mimeType: file.type || "application/octet-stream",
         size: file.size,
         dataUrl,
+        previewDataUrl,
         position: {
           x: Number(playerPosition.x.toFixed(2)),
           y: Number(playerPosition.y.toFixed(2)),
@@ -1703,8 +1927,9 @@ export function createUploadPinManager({
       const rawPath = String(file.webkitRelativePath || file.name || "");
       const path = rawPath || file.name || "item";
       const name = path.split("/").pop() || file.name || "item";
+      const fileType = getFileType(file);
       const mimeType = String(file.type || "application/octet-stream");
-      const entryType = inferFolderEntryType(name, mimeType);
+      const entryType = inferFolderEntryType(name, mimeType) || fileType;
       let previewDataUrl = "";
       let entryDataUrl = "";
       try {
@@ -1712,13 +1937,7 @@ export function createUploadPinManager({
       } catch {
         entryDataUrl = "";
       }
-      if (entryType === "image" && size > 0) {
-        try {
-          previewDataUrl = await readImageThumbnailDataUrl(file);
-        } catch {
-          previewDataUrl = "";
-        }
-      }
+      previewDataUrl = await createPreviewDataUrlForFile(file, entryType, 300);
       entries.push({
         path,
         name,
@@ -1774,7 +1993,7 @@ export function createUploadPinManager({
       const path = String(file.name || "item");
       const name = path.split("/").pop() || file.name || "item";
       const mimeType = String(file.type || "application/octet-stream");
-      const entryType = inferFolderEntryType(name, mimeType);
+      const entryType = inferFolderEntryType(name, mimeType) || fileType;
 
       let previewDataUrl = "";
       let entryDataUrl = "";
@@ -1783,13 +2002,7 @@ export function createUploadPinManager({
       } catch {
         entryDataUrl = "";
       }
-      if (entryType === "image" && size > 0) {
-        try {
-          previewDataUrl = await readImageThumbnailDataUrl(file);
-        } catch {
-          previewDataUrl = "";
-        }
-      }
+      previewDataUrl = await createPreviewDataUrlForFile(file, entryType, 300);
 
       newEntries.push({
         path,

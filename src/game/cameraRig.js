@@ -18,7 +18,7 @@ export function createThirdPersonCameraRig(THREE, camera, initial = {}) {
   function update(delta, input, playerObject, _playerState, lockCamera = false) {
     const look = input.consumeLookDelta();
     if (!lockCamera) {
-      state.targetYaw -= look.x * state.lookSensitivityX;
+      state.targetYaw += look.x * state.lookSensitivityX;
       state.targetPitch -= look.y * state.lookSensitivityY;
       state.targetPitch = clamp(state.targetPitch, state.pitchMin, state.pitchMax);
     }

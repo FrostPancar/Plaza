@@ -545,8 +545,8 @@ renderer.domElement.addEventListener(
       mobileLookState.lastX = touch.clientX;
       mobileLookState.lastY = touch.clientY;
       input.setPointerPosition(touch.clientX, touch.clientY);
-      // Natural mobile pan: vertical drag matches native touch-scroll feel.
-      input.addLookDelta(dx * MOBILE_LOOK_SENSITIVITY, -dy * MOBILE_LOOK_SENSITIVITY);
+      // Natural mobile look: swipe right => look right, swipe up => look up.
+      input.addLookDelta(dx * MOBILE_LOOK_SENSITIVITY, dy * MOBILE_LOOK_SENSITIVITY);
       const travel = Math.hypot(touch.clientX - mobileLookState.startX, touch.clientY - mobileLookState.startY);
       if (travel > mobileLookState.maxTravel) mobileLookState.maxTravel = travel;
       if (!mobileLookState.moved) {

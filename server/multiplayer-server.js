@@ -160,6 +160,7 @@ function sanitizePins(rawPins, defaultOwnerId = "") {
       mimeType: String(item.mimeType || "application/octet-stream"),
       size: finite(item.size, 0),
       dataUrl: String(item.dataUrl || ""),
+      previewDataUrl: String(item.previewDataUrl || ""),
       position: {
         x: finite(item.position?.x, 0),
         y: finite(item.position?.y, 0),
