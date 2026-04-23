@@ -510,7 +510,9 @@ window.addEventListener("mousedown", (event) => {
           lastStarHintAt = now;
         }
       }
+      return;
     }
+    uploadPins.handleClick(pointer.x, pointer.y, renderer.domElement);
   }
 });
 
@@ -933,14 +935,7 @@ function animate() {
       }
     }
     const cameraStateUi = cameraRig.getState();
-    const showStarReticle =
-      !isDecoratingMode &&
-      !actionMenu.isOpen() &&
-      !overlay.isOpen() &&
-      !colorPanel.isOpen() &&
-      !filterPanel.isOpen() &&
-      isStarPlacementModifierActive() &&
-      constellations.canAim(camera);
+    const showStarReticle = !inMaskSelection;
     constellationReticle.setVisible(showStarReticle);
 
     if (!useTouchControls && !uiLocksMovement && !input.isPointerLocked() && !triedInitialPointerLock) {
@@ -1232,10 +1227,6 @@ function isTypingTarget(target) {
   if (tagName !== "INPUT") return false;
   const type = String(element.type || "").toLowerCase();
   return type !== "checkbox" && type !== "radio" && type !== "range";
-}
-
-function isStarPlacementModifierActive() {
-  return input.isDown("AltLeft") || input.isDown("AltRight");
 }
 
 function syncInventorySlot() {

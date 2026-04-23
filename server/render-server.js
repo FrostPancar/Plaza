@@ -395,13 +395,16 @@ function isPinPayloadValid(item) {
 
 function sanitizeSky(rawSky) {
   if (!rawSky || typeof rawSky !== "object") return null;
+  const updatedAt = Number.isFinite(Number(rawSky.updatedAt)) ? Number(rawSky.updatedAt) : Date.now();
+  const darkMode =
+    typeof rawSky.darkMode === "boolean"
+      ? rawSky.darkMode
+      : String(rawSky.mode || "").toLowerCase() === "dark";
   return {
-    mode: rawSky.mode === "dark" ? "dark" : "light",
-    skyColor: sanitizeHex(rawSky.skyColor, "#0f172a"),
-    skyTop: sanitizeHex(rawSky.skyTop, "#081124"),
-    skyBottom: sanitizeHex(rawSky.skyBottom, "#111f3d"),
-    groundColor: sanitizeHex(rawSky.groundColor, "#f5f8ff"),
-    fogColor: sanitizeHex(rawSky.fogColor, "#dce7ff"),
+    skyColor: sanitizeHex(rawSky.skyColor, "#f3f5f7"),
+    groundColor: sanitizeHex(rawSky.groundColor, "#ffffff"),
+    darkMode: Boolean(darkMode),
+    updatedAt,
   };
 }
 
