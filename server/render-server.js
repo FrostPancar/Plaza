@@ -5,6 +5,8 @@ import { dirname, extname, join, normalize, resolve } from "path";
 
 const PORT = Number(process.env.PORT || process.env.MULTIPLAYER_PORT || 8787);
 const HOST = process.env.MULTIPLAYER_HOST || "0.0.0.0";
+const PLAYER_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+const PLAYER_INACTIVITY_CHECK_INTERVAL_MS = 30 * 1000;
 const ROOT_DIR = process.cwd();
 const WORLD_STATE_PATH = resolve(process.env.WORLD_STATE_PATH || "server/world-state.json");
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/+$/, "");
@@ -30,10 +32,14 @@ const world = {
   players: {},
   pins: [],
   pinsRevision: 0,
+  sky: null,
+  constellations: null,
+  constellationsRevision: 0,
   updatedAt: Date.now(),
 };
 
 const sockets = new Map();
+const clientLastSeenAt = new Map();
 let playersDirty = false;
 let persistTimer = null;
 
@@ -81,7 +87,7 @@ const server = createServer((req, res) => {
   streamFile(absPath, type, res);
 });
 
-const wss = new WebSocketServer({ noServer: true });
+const wss = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 * 1024 });
 
 server.on("upgrade", (req, socket, head) => {
   const pathOnly = String(req.url || "/").split("?")[0] || "/";
@@ -97,9 +103,11 @@ server.on("upgrade", (req, socket, head) => {
 wss.on("connection", (ws) => {
   const id = uid();
   sockets.set(ws, id);
+  markClientSeen(id);
   send(ws, { type: "welcome", clientId: id, world });
 
   ws.on("message", (raw) => {
+    markClientSeen(id);
     const message = parseMessage(raw);
     if (!message) return;
     handleMessage(id, message);
@@ -107,12 +115,23 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     sockets.delete(ws);
+    clientLastSeenAt.delete(id);
     if (world.players[id]) {
       delete world.players[id];
       world.updatedAt = Date.now();
       playersDirty = true;
     }
   });
+
+  ws.on("error", (error) => {
+    const message = error?.message || String(error);
+    console.warn(`[render] client socket error (${id}): ${message}`);
+  });
+});
+
+wss.on("error", (error) => {
+  const message = error?.message || String(error);
+  console.warn(`[render] websocket server error: ${message}`);
 });
 
 setInterval(() => {
@@ -120,6 +139,10 @@ setInterval(() => {
   playersDirty = false;
   broadcastPlayers();
 }, Math.round(1000 / 15));
+
+setInterval(() => {
+  reapInactivePlayers();
+}, PLAYER_INACTIVITY_CHECK_INTERVAL_MS);
 
 void worldLoadPromise.finally(() => {
   server.listen(PORT, HOST, () => {
@@ -134,6 +157,15 @@ function handleMessage(clientId, message) {
     if ((!Array.isArray(world.pins) || world.pins.length === 0) && Array.isArray(payload.pins) && payload.pins.length > 0) {
       world.pins = sanitizePins(payload.pins, clientId);
       world.pinsRevision += 1;
+      schedulePersistWorld();
+    }
+    if (!world.sky && payload.sky) {
+      world.sky = sanitizeSky(payload.sky);
+      schedulePersistWorld();
+    }
+    if (!world.constellations && payload.constellations) {
+      world.constellations = sanitizeConstellations(payload.constellations);
+      world.constellationsRevision = world.constellations ? 1 : 0;
       schedulePersistWorld();
     }
     world.updatedAt = Date.now();
@@ -157,6 +189,56 @@ function handleMessage(clientId, message) {
     world.updatedAt = Date.now();
     schedulePersistWorld();
     broadcastPins();
+    return;
+  }
+
+  if (message.type === "full_world_sync") {
+    const nextPins = dedupePinsById(sanitizePins(message.payload?.pins, clientId));
+    if (nextPins.length > 0 || world.pins.length === 0) {
+      world.pins = nextPins;
+      world.pinsRevision += 1;
+      world.updatedAt = Date.now();
+      schedulePersistWorld();
+      broadcastPins();
+    }
+
+    const nextSky = sanitizeSky(message.payload?.sky);
+    if (nextSky) {
+      world.sky = nextSky;
+      world.updatedAt = Date.now();
+      schedulePersistWorld();
+      broadcastSky();
+    }
+
+    const nextConstellations = sanitizeConstellations(message.payload?.constellations);
+    if (nextConstellations) {
+      world.constellations = nextConstellations;
+      world.constellationsRevision += 1;
+      world.updatedAt = Date.now();
+      schedulePersistWorld();
+      broadcastConstellations();
+    }
+    return;
+  }
+
+  if (message.type === "sky_update") {
+    const nextSky = sanitizeSky(message.payload?.sky);
+    if (!nextSky) return;
+    world.sky = nextSky;
+    world.updatedAt = Date.now();
+    schedulePersistWorld();
+    broadcastSky();
+    return;
+  }
+
+  if (message.type === "constellations_update") {
+    const next = sanitizeConstellations(message.payload?.constellations);
+    if (!next) return;
+    world.constellations = next;
+    world.constellationsRevision += 1;
+    world.updatedAt = Date.now();
+    schedulePersistWorld();
+    broadcastConstellations();
   }
 }
 
@@ -176,12 +258,64 @@ function broadcastPins() {
   }
 }
 
+function broadcastSky() {
+  if (!world.sky) return;
+  const payload = { type: "sky_snapshot", sky: world.sky };
+  for (const [ws] of sockets.entries()) {
+    if (ws.readyState !== ws.OPEN) continue;
+    send(ws, payload);
+  }
+}
+
+function broadcastConstellations() {
+  if (!world.constellations) return;
+  const payload = {
+    type: "constellations_snapshot",
+    constellations: world.constellations,
+    constellationsRevision: world.constellationsRevision,
+  };
+  for (const [ws] of sockets.entries()) {
+    if (ws.readyState !== ws.OPEN) continue;
+    send(ws, payload);
+  }
+}
+
 function sendToClient(clientId, payload) {
   for (const [ws, id] of sockets.entries()) {
     if (id !== clientId) continue;
     if (ws.readyState !== ws.OPEN) continue;
     send(ws, payload);
     return;
+  }
+}
+
+function markClientSeen(clientId) {
+  if (!clientId) return;
+  clientLastSeenAt.set(clientId, Date.now());
+}
+
+function reapInactivePlayers() {
+  const now = Date.now();
+  let removedAny = false;
+  for (const [ws, id] of sockets.entries()) {
+    const lastSeen = Number(clientLastSeenAt.get(id)) || 0;
+    if (lastSeen <= 0) continue;
+    if (now - lastSeen <= PLAYER_INACTIVITY_TIMEOUT_MS) continue;
+    clientLastSeenAt.delete(id);
+    sockets.delete(ws);
+    if (world.players[id]) {
+      delete world.players[id];
+      removedAny = true;
+    }
+    try {
+      if (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING) {
+        ws.close(4001, "Inactivity timeout");
+      }
+    } catch {}
+  }
+  if (removedAny) {
+    world.updatedAt = now;
+    playersDirty = true;
   }
 }
 
@@ -248,7 +382,85 @@ function sanitizePins(rawPins, defaultOwnerId = "") {
             .filter((layer) => layer.surfaceId && layer.dataUrl)
         : [],
     }))
-    .filter((item) => item.fileType && (item.fileType === "graffiti" || item.dataUrl));
+    .filter(isPinPayloadValid);
+}
+
+function isPinPayloadValid(item) {
+  if (!item?.fileType) return false;
+  if (item.fileType === "graffiti") return true;
+  if (typeof item.dataUrl === "string" && item.dataUrl.length > 0) return true;
+  if (item.fileType === "folder") return true;
+  return false;
+}
+
+function sanitizeSky(rawSky) {
+  if (!rawSky || typeof rawSky !== "object") return null;
+  return {
+    mode: rawSky.mode === "dark" ? "dark" : "light",
+    skyColor: sanitizeHex(rawSky.skyColor, "#0f172a"),
+    skyTop: sanitizeHex(rawSky.skyTop, "#081124"),
+    skyBottom: sanitizeHex(rawSky.skyBottom, "#111f3d"),
+    groundColor: sanitizeHex(rawSky.groundColor, "#f5f8ff"),
+    fogColor: sanitizeHex(rawSky.fogColor, "#dce7ff"),
+  };
+}
+
+function sanitizeConstellations(rawConstellations) {
+  if (!rawConstellations || typeof rawConstellations !== "object") return null;
+  const rawStars = Array.isArray(rawConstellations.stars) ? rawConstellations.stars.slice(0, 2000) : [];
+  const rawLinks = Array.isArray(rawConstellations.links) ? rawConstellations.links.slice(0, 4000) : [];
+  const stars = [];
+  const byId = new Set();
+  for (const star of rawStars) {
+    if (!star || typeof star !== "object") continue;
+    const id = String(star.id || "");
+    if (!id || byId.has(id)) continue;
+    const legacyPosition = star.position && typeof star.position === "object" ? star.position : null;
+    const x = Number.isFinite(Number(star.x))
+      ? finite(star.x, 0)
+      : finite(legacyPosition?.x, 0);
+    const y = Number.isFinite(Number(star.y))
+      ? finite(star.y, 0)
+      : finite(legacyPosition?.y, 0);
+    const z = Number.isFinite(Number(star.z))
+      ? finite(star.z, 0)
+      : finite(legacyPosition?.z, 0);
+    stars.push({
+      id,
+      x,
+      y,
+      z,
+      seeded: Boolean(star.seeded),
+      placedAt: Number.isFinite(Number(star.placedAt)) ? Number(star.placedAt) : Date.now(),
+    });
+    byId.add(id);
+  }
+  const links = [];
+  const seen = new Set();
+  for (const link of rawLinks) {
+    if (!link || typeof link !== "object") continue;
+    const a = String(link.a || "");
+    const b = String(link.b || "");
+    if (!a || !b || a === b) continue;
+    if (!byId.has(a) || !byId.has(b)) continue;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const key = `${lo}|${hi}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push({ a: lo, b: hi });
+  }
+  return {
+    stars,
+    links,
+    updatedAt: Number.isFinite(Number(rawConstellations.updatedAt))
+      ? Number(rawConstellations.updatedAt)
+      : Date.now(),
+  };
+}
+
+function sanitizeHex(value, fallback) {
+  const v = String(value || "").trim();
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : fallback;
 }
 
 function reconcilePins(currentPins, incomingPins, clientId) {
@@ -289,8 +501,20 @@ function reconcilePins(currentPins, incomingPins, clientId) {
     });
   }
 
-  output.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
-  return output;
+  return dedupePinsById(output);
+}
+
+function dedupePinsById(pins) {
+  const byId = new Map();
+  for (const pin of Array.isArray(pins) ? pins : []) {
+    if (!pin || typeof pin !== "object") continue;
+    const id = String(pin.id || "");
+    if (!id) continue;
+    byId.set(id, pin);
+  }
+  const out = [...byId.values()];
+  out.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  return out;
 }
 
 function parseMessage(raw) {
@@ -334,8 +558,17 @@ async function loadPersistedWorld() {
     const raw = readFileSync(WORLD_STATE_PATH, "utf8");
     const parsed = JSON.parse(raw);
     const loadedPins = sanitizePins(parsed?.pins || []);
+    const loadedSky = sanitizeSky(parsed?.sky);
+    const loadedConstellations = sanitizeConstellations(parsed?.constellations);
     world.pins = loadedPins;
     world.pinsRevision = Number.isFinite(Number(parsed?.pinsRevision)) ? Number(parsed.pinsRevision) : loadedPins.length ? 1 : 0;
+    world.sky = loadedSky;
+    world.constellations = loadedConstellations;
+    world.constellationsRevision = Number.isFinite(Number(parsed?.constellationsRevision))
+      ? Number(parsed.constellationsRevision)
+      : loadedConstellations
+        ? 1
+        : 0;
     world.updatedAt = Number.isFinite(Number(parsed?.updatedAt)) ? Number(parsed.updatedAt) : Date.now();
     console.log(`[render] loaded ${loadedPins.length} pins from ${WORLD_STATE_PATH}`);
   } catch (error) {
@@ -361,6 +594,9 @@ async function persistWorld() {
         {
           pins: world.pins,
           pinsRevision: world.pinsRevision,
+          sky: world.sky,
+          constellations: world.constellations,
+          constellationsRevision: world.constellationsRevision,
           updatedAt: world.updatedAt,
         },
         null,
@@ -384,7 +620,7 @@ process.on("SIGTERM", () => {
 async function loadWorldFromSupabase() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return false;
   try {
-    const url = `${SUPABASE_URL}/rest/v1/world_state?id=eq.${encodeURIComponent(SUPABASE_WORLD_ROW_ID)}&select=pins,pins_revision,updated_at`;
+    const url = `${SUPABASE_URL}/rest/v1/world_state?id=eq.${encodeURIComponent(SUPABASE_WORLD_ROW_ID)}&select=pins,pins_revision,sky,constellations,constellations_revision,updated_at`;
     const response = await fetch(url, {
       headers: supabaseHeaders(),
     });
@@ -396,8 +632,17 @@ async function loadWorldFromSupabase() {
     const row = Array.isArray(rows) ? rows[0] : null;
     if (!row) return false;
     const loadedPins = sanitizePins(row.pins || []);
+    const loadedSky = sanitizeSky(row.sky);
+    const loadedConstellations = sanitizeConstellations(row.constellations);
     world.pins = loadedPins;
     world.pinsRevision = Number.isFinite(Number(row.pins_revision)) ? Number(row.pins_revision) : loadedPins.length ? 1 : 0;
+    world.sky = loadedSky;
+    world.constellations = loadedConstellations;
+    world.constellationsRevision = Number.isFinite(Number(row.constellations_revision))
+      ? Number(row.constellations_revision)
+      : loadedConstellations
+        ? 1
+        : 0;
     world.updatedAt = Number.isFinite(Number(row.updated_at)) ? Number(row.updated_at) : Date.now();
     console.log(`[render] loaded ${loadedPins.length} pins from Supabase`);
     return true;
@@ -423,6 +668,9 @@ async function persistWorldToSupabase() {
           id: SUPABASE_WORLD_ROW_ID,
           pins: world.pins,
           pins_revision: world.pinsRevision,
+          sky: world.sky,
+          constellations: world.constellations,
+          constellations_revision: world.constellationsRevision,
           updated_at: world.updatedAt,
         },
       ]),

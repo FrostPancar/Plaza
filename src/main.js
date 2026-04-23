@@ -1,21 +1,21 @@
 import * as THREE from "https://unpkg.com/three@0.180.0/build/three.module.js";
-import { MASK_OPTIONS } from "./config/masks.js?v=20260421d";
-import { createActionRegistry } from "./config/actions.js?v=20260421d";
-import { createPersistence, createDefaultSave } from "./core/persistence.js?v=20260421d";
-import { NetworkClient, RemoteAvatarStore } from "./core/network.js?v=20260421d";
-import { createPlazaScene, addLighting } from "./game/plazaScene.js?v=20260421d";
-import { createInput } from "./game/input.js?v=20260421d";
-import { buildMasks } from "./game/maskFactory.js?v=20260421d";
-import { createPlayerController } from "./game/player.js?v=20260421d";
-import { createThirdPersonCameraRig } from "./game/cameraRig.js?v=20260421d";
-import { createUploadPinManager } from "./game/uploadPins.js?v=20260421d";
-import { createMaskSelectionUI } from "./ui/maskSelection.js?v=20260421d";
-import { createActionMenuUI } from "./ui/actionMenu.js?v=20260421d";
-import { createFileOverlayUI } from "./ui/fileOverlay.js?v=20260421d";
-import { createGraffitiPaletteUI } from "./ui/graffitiPalette.js?v=20260421d";
-import { createColorPanelUI, createFilterPanelUI } from "./ui/environmentPanels.js?v=20260421d";
-import { createTouchJoystickUI } from "./ui/touchJoystick.js?v=20260421d";
-import { captureSelfie } from "./ui/cameraCapture.js?v=20260421d";
+import { MASK_OPTIONS } from "./config/masks.js?v=20260422b";
+import { createActionRegistry } from "./config/actions.js?v=20260422b";
+import { createPersistence, createDefaultSave } from "./core/persistence.js?v=20260422b";
+import { NetworkClient, RemoteAvatarStore } from "./core/network.js?v=20260422b";
+import { createPlazaScene, addLighting } from "./game/plazaScene.js?v=20260422b";
+import { createInput } from "./game/input.js?v=20260422b";
+import { buildMasks } from "./game/maskFactory.js?v=20260422b";
+import { createPlayerController } from "./game/player.js?v=20260422b";
+import { createThirdPersonCameraRig } from "./game/cameraRig.js?v=20260422b";
+import { createUploadPinManager } from "./game/uploadPins.js?v=20260422b";
+import { createMaskSelectionUI } from "./ui/maskSelection.js?v=20260422b";
+import { createActionMenuUI } from "./ui/actionMenu.js?v=20260422b";
+import { createFileOverlayUI } from "./ui/fileOverlay.js?v=20260422b";
+import { createGraffitiPaletteUI } from "./ui/graffitiPalette.js?v=20260422b";
+import { createColorPanelUI, createFilterPanelUI } from "./ui/environmentPanels.js?v=20260422b";
+import { createTouchJoystickUI } from "./ui/touchJoystick.js?v=20260422b";
+import { captureSelfie } from "./ui/cameraCapture.js?v=20260422b";
 
 const GRAFFITI_COLORS = ["#ff4d4d", "#2f74ff", "#1fbf6d", "#f4b400"];
 const REMOTE_AVATAR_VISIBILITY_RADIUS = 56;
@@ -38,6 +38,10 @@ const AUTO_QUALITY_UP_FPS = 57;
 const AUTO_QUALITY_SCALES = [1, 0.88, 0.76, 0.64];
 const TRUSTED_DEVICE_KEY = "plaza.trustedDevice.v1";
 const CONTROL_DEBUG_PARAM = "controlsDebug";
+const CONSTELLATION_MIN_LOOK_PITCH = 0.02;
+const CONSTELLATION_LINK_TIMEOUT_MS = 10_000;
+const CONSTELLATION_LINK_MAX_DISTANCE = 36;
+const FULL_WORLD_SYNC_COOLDOWN_MS = 1200;
 
 const root = document.getElementById("game-root");
 const uiRoot = document.getElementById("ui-root");
@@ -94,8 +98,14 @@ let remoteAvatarRenderer = null;
 let suppressNetworkPinBroadcast = false;
 let networkReady = false;
 let lastPinsRevision = -1;
+let lastConstellationsRevision = -1;
+let lastSkyRevision = 0;
 let lastSentPlayerState = null;
 let lastSentMaskId = null;
+let uploadsHydrated = false;
+let lastFullWorldSyncAt = 0;
+let pendingFullWorldSync = false;
+let networkStatusHideTimer = null;
 
 const input = createInput();
 input.bind(renderer.domElement);
@@ -182,6 +192,11 @@ const notification = document.createElement("div");
 notification.className = "status-toast hidden";
 uiRoot.appendChild(notification);
 
+const networkStatusBadge = document.createElement("div");
+networkStatusBadge.className = "network-status network-status--connecting";
+uiRoot.appendChild(networkStatusBadge);
+setNetworkStatus("connecting");
+
 const inventorySlot = document.createElement("div");
 inventorySlot.className = "inventory-slot empty";
 inventorySlot.innerHTML =
@@ -214,10 +229,10 @@ const colorPanel = createColorPanelUI(uiRoot, {
   onApply: ({ skyColor: nextSky, groundColor: nextGround }) => {
     skyColor = normalizeHex(nextSky, skyColor);
     groundColor = normalizeHex(nextGround, groundColor);
-    lighting.setSkyColor(skyColor);
-    plaza.setGroundColor(groundColor);
-    persistence.setVisuals({ skyColor, groundColor });
+    applyThemeColors();
+    persistence.setVisuals({ skyColor, groundColor, darkMode });
     colorPanel.setValues({ skyColor, groundColor });
+    publishSkyState();
   },
 });
 
@@ -275,6 +290,12 @@ const player = createPlayerController(
 
 const cameraRig = createThirdPersonCameraRig(THREE, camera, loadedSave.player);
 player.setFirstPersonView(true, camera);
+const constellations = createConstellationSystem(THREE, scene, {
+  minLookPitch: CONSTELLATION_MIN_LOOK_PITCH,
+  linkTimeoutMs: CONSTELLATION_LINK_TIMEOUT_MS,
+  linkMaxDistance: CONSTELLATION_LINK_MAX_DISTANCE,
+});
+const constellationReticle = createConstellationReticle(uiRoot);
 
 const graffitiPalette = createGraffitiPaletteUI(
   uiRoot,
@@ -318,6 +339,8 @@ uploadPins.setPaintColor(GRAFFITI_COLORS[0]);
 uploadPins.setBrushSize(0.45);
 void persistence.hydrateUploads().then((uploads) => {
   uploadPins.loadFromSaved(uploads || []);
+  uploadsHydrated = true;
+  if (networkReady) publishFullWorldSync({ manual: false });
 });
 
 const actions = createActionRegistry({
@@ -373,6 +396,7 @@ const actions = createActionRegistry({
     darkMode = !darkMode;
     applyThemeColors();
     persistence.setVisuals({ darkMode });
+    publishSkyState();
     showToast(darkMode ? "Dark mode enabled." : "Dark mode disabled.");
   },
   disableDecorate: useTouchControls,
@@ -439,6 +463,16 @@ function getMouseInteractionPointer(event) {
 }
 
 window.addEventListener("keydown", (event) => {
+  if (isTypingTarget(event.target)) return;
+  if (event.shiftKey && event.code === "KeyP" && !event.repeat) {
+    if (inMaskSelection) return;
+    event.preventDefault();
+    const now = Date.now();
+    if (now - lastFullWorldSyncAt < FULL_WORLD_SYNC_COOLDOWN_MS) return;
+    lastFullWorldSyncAt = now;
+    publishFullWorldSync({ manual: true });
+    return;
+  }
   if (event.code === "KeyE") return;
   if (!shouldLockForNavigation()) return;
   if (!input.isPointerLocked()) {
@@ -451,9 +485,32 @@ window.addEventListener("mousedown", (event) => {
   if (useTouchControls) return;
   if (event.button !== 0) return;
   if (!shouldLockForNavigation()) return;
-  if (!input.isPointerLocked()) {
+  const wasLocked = input.isPointerLocked();
+  if (!wasLocked) {
     input.requestPointerLock();
     triedInitialPointerLock = true;
+    return;
+  }
+  if (actionMenu.isOpen()) return;
+  if (!overlay.isOpen() && !colorPanel.isOpen() && !filterPanel.isOpen() && !uploadPins.isDecoratingMode()) {
+    const pointer = input.getPointerPosition();
+    const threw = throwInventoryAtPointer(pointer.x, pointer.y);
+    if (threw) return;
+    if (event.altKey) {
+      const droppedStar = constellations.tryDropStar(pointer.x, pointer.y, renderer.domElement, camera);
+      if (droppedStar) {
+        publishConstellationsState();
+        event.preventDefault();
+        return;
+      }
+      if (!constellations.canAim(camera)) {
+        const now = performance.now();
+        if (now - lastStarHintAt > 1200) {
+          showToast("Look a bit higher to place stars.");
+          lastStarHintAt = now;
+        }
+      }
+    }
   }
 });
 
@@ -487,7 +544,11 @@ renderer.domElement.addEventListener("mousedown", (event) => {
   }
   if (event.button !== 0) return;
   if (inMaskSelection) return;
-  if (event.target !== renderer.domElement) return;
+  // Pointer-locked primary click is handled in the window listener.
+  if (input.isPointerLocked()) return;
+  // In pointer-lock some browsers dispatch mouse events from document/body.
+  // Allow clicks while locked even if target is not the canvas element.
+  if (!input.isPointerLocked() && event.target !== renderer.domElement) return;
 
   const uiLocks = actionMenu.isOpen() || overlay.isOpen();
 
@@ -500,6 +561,20 @@ renderer.domElement.addEventListener("mousedown", (event) => {
     const pointer = getMouseInteractionPointer(event);
     const threw = throwInventoryAtPointer(pointer.x, pointer.y);
     if (threw) return;
+    if (event.altKey) {
+      const droppedStar = constellations.tryDropStar(pointer.x, pointer.y, renderer.domElement, camera);
+      if (droppedStar) {
+        publishConstellationsState();
+        return;
+      }
+      if (!constellations.canAim(camera)) {
+        const now = performance.now();
+        if (now - lastStarHintAt > 1200) {
+          showToast("Look a bit higher to place stars.");
+          lastStarHintAt = now;
+        }
+      }
+    }
   }
 
   const clickedBuildShape = false;
@@ -651,15 +726,28 @@ if (inMaskSelection) {
 }
 
 networkClient.on("connected", () => {
+  setNetworkStatus("connected");
   networkReady = true;
   networkClient.send("join", {
     maskId: selectedMaskId || null,
     player: serializeLocalPlayer(player.getState()),
     pins: uploadPins.getSerializablePins(),
+    sky: serializeSkyState(),
+    constellations: constellations.serialize(),
   });
+  if (uploadsHydrated) publishFullWorldSync({ manual: false });
+  if (pendingFullWorldSync) {
+    pendingFullWorldSync = false;
+    const synced = publishFullWorldSync({ manual: false });
+    if (synced) showToast("Reconnected: world sync sent.");
+  }
 });
 
 networkClient.on("disconnected", () => {
+  setNetworkStatus("offline");
+  window.setTimeout(() => {
+    if (!networkReady) setNetworkStatus("connecting");
+  }, 700);
   networkReady = false;
   remoteAvatars.replaceAll({}, "");
 });
@@ -667,6 +755,14 @@ networkClient.on("disconnected", () => {
 networkClient.on("world_snapshot", ({ world }) => {
   if (!world || typeof world !== "object") return;
   remoteAvatars.replaceAll(world.players || {}, networkClient.clientId);
+  if (world.sky) applySharedSkyState(world.sky);
+  if (world.constellations && typeof world.constellations === "object") {
+    const revision = Number.isFinite(Number(world.constellationsRevision))
+      ? Number(world.constellationsRevision)
+      : 0;
+    lastConstellationsRevision = revision;
+    constellations.loadShared(world.constellations, { replace: true });
+  }
   const revision = Number.isFinite(Number(world.pinsRevision)) ? Number(world.pinsRevision) : 0;
   if (Array.isArray(world.pins) && revision !== lastPinsRevision) {
     lastPinsRevision = revision;
@@ -690,6 +786,21 @@ networkClient.on("pins_snapshot", ({ pins, pinsRevision }) => {
   suppressNetworkPinBroadcast = false;
 });
 
+networkClient.on("sky_snapshot", ({ sky }) => {
+  if (!sky || typeof sky !== "object") return;
+  applySharedSkyState(sky);
+});
+
+networkClient.on("constellations_snapshot", ({ constellations: next, constellationsRevision }) => {
+  const revision = Number.isFinite(Number(constellationsRevision))
+    ? Number(constellationsRevision)
+    : lastConstellationsRevision + 1;
+  if (revision === lastConstellationsRevision) return;
+  lastConstellationsRevision = revision;
+  if (!next || typeof next !== "object") return;
+  constellations.loadShared(next, { replace: true });
+});
+
 networkClient.connect();
 
 graffitiPalette.hide();
@@ -700,6 +811,7 @@ let playerSyncAccumulator = 0;
 let paintDirty = false;
 let paintIdleSeconds = 999;
 let draggingBuildShape = false;
+let lastStarHintAt = 0;
 let inventoryItem = null;
 let inventoryThrowState = null;
 let suppressPaintUntilMouseUp = false;
@@ -820,6 +932,16 @@ function animate() {
         });
       }
     }
+    const cameraStateUi = cameraRig.getState();
+    const showStarReticle =
+      !isDecoratingMode &&
+      !actionMenu.isOpen() &&
+      !overlay.isOpen() &&
+      !colorPanel.isOpen() &&
+      !filterPanel.isOpen() &&
+      isStarPlacementModifierActive() &&
+      constellations.canAim(camera);
+    constellationReticle.setVisible(showStarReticle);
 
     if (!useTouchControls && !uiLocksMovement && !input.isPointerLocked() && !triedInitialPointerLock) {
       input.requestPointerLock();
@@ -864,6 +986,7 @@ function animate() {
     }
   } else {
     decorateControls.setVisible(false);
+    constellationReticle.setVisible(false);
     if (draggingBuildShape) {
       draggingBuildShape = false;
     }
@@ -877,6 +1000,7 @@ function animate() {
   updateMobilePickupHold();
 
   const elapsed = clock.elapsedTime;
+  constellations.update(elapsed);
   plaza.updateAtmosphere?.(elapsed);
   lighting.updateAtmosphere?.(elapsed);
   if (typeof plaza.updateReflections === "function") {
@@ -928,6 +1052,34 @@ function showToast(message) {
   }, 2200);
 }
 
+function setNetworkStatus(state) {
+  const next = String(state || "").toLowerCase();
+  if (networkStatusHideTimer) {
+    clearTimeout(networkStatusHideTimer);
+    networkStatusHideTimer = null;
+  }
+  networkStatusBadge.classList.remove("network-status--offline", "network-status--connecting", "network-status--connected");
+  if (next === "connected") {
+    networkStatusBadge.classList.add("network-status--connected");
+    networkStatusBadge.classList.remove("hidden");
+    networkStatusBadge.textContent = "Connected";
+    networkStatusHideTimer = window.setTimeout(() => {
+      networkStatusBadge.classList.add("hidden");
+      networkStatusHideTimer = null;
+    }, 2000);
+    return;
+  }
+  if (next === "offline") {
+    networkStatusBadge.classList.add("network-status--offline");
+    networkStatusBadge.classList.remove("hidden");
+    networkStatusBadge.textContent = "Offline";
+    return;
+  }
+  networkStatusBadge.classList.add("network-status--connecting");
+  networkStatusBadge.classList.remove("hidden");
+  networkStatusBadge.textContent = "Connecting…";
+}
+
 function applyFilters() {
   renderScale = pixelationToScale(pixelationStrength) * autoQualityScale;
   const clampedScale = clamp(renderScale, 0.08, 1, 0.62);
@@ -944,6 +1096,63 @@ function applyThemeColors() {
   lighting.setSkyColor(activeSky);
   plaza.setGroundColor(activeGround);
   document.body.classList.toggle("theme-dark", darkMode);
+}
+
+function serializeSkyState() {
+  return {
+    skyColor,
+    groundColor,
+    darkMode: Boolean(darkMode),
+    updatedAt: Date.now(),
+  };
+}
+
+function applySharedSkyState(next) {
+  if (!next || typeof next !== "object") return;
+  const revision = Number.isFinite(Number(next.updatedAt)) ? Number(next.updatedAt) : Date.now();
+  if (revision <= lastSkyRevision) return;
+  lastSkyRevision = revision;
+  skyColor = normalizeHex(next.skyColor, skyColor);
+  groundColor = normalizeHex(next.groundColor, groundColor);
+  darkMode = Boolean(next.darkMode);
+  colorPanel.setValues({ skyColor, groundColor });
+  applyThemeColors();
+  persistence.setVisuals({ skyColor, groundColor, darkMode });
+}
+
+function publishSkyState() {
+  if (!networkReady) return;
+  const sky = serializeSkyState();
+  lastSkyRevision = Math.max(lastSkyRevision, Number(sky.updatedAt) || Date.now());
+  networkClient.send("sky_update", { sky });
+}
+
+function publishConstellationsState() {
+  if (!networkReady) return;
+  networkClient.send("constellations_update", {
+    constellations: constellations.serialize(),
+  });
+}
+
+function publishFullWorldSync({ manual = false } = {}) {
+  if (!networkReady) {
+    if (manual) {
+      pendingFullWorldSync = true;
+      showToast("World server offline. Sync queued for reconnect.");
+    }
+    return false;
+  }
+  const pins = uploadPins.getSerializablePins();
+  networkClient.send("full_world_sync", {
+    pins,
+    sky: serializeSkyState(),
+    constellations: constellations.serialize(),
+    clientUpdatedAt: Date.now(),
+  });
+  if (manual) {
+    showToast(`World synced (${pins.length} pins).`);
+  }
+  return true;
 }
 
 function pixelationToScale(pixelation) {
@@ -1012,6 +1221,21 @@ function safeLocalStorageSet(key, value) {
   } catch {
     // Ignore storage write failures in restricted contexts.
   }
+}
+
+function isTypingTarget(target) {
+  if (!target || typeof target !== "object") return false;
+  const element = target;
+  const tagName = typeof element.tagName === "string" ? element.tagName.toUpperCase() : "";
+  if (element.isContentEditable) return true;
+  if (tagName === "TEXTAREA") return true;
+  if (tagName !== "INPUT") return false;
+  const type = String(element.type || "").toLowerCase();
+  return type !== "checkbox" && type !== "radio" && type !== "range";
+}
+
+function isStarPlacementModifierActive() {
+  return input.isDown("AltLeft") || input.isDown("AltRight");
 }
 
 function syncInventorySlot() {
@@ -1335,6 +1559,228 @@ function updateInventoryThrow(delta) {
   }
 }
 
+function createConstellationSystem(
+  THREE,
+  scene,
+  { minLookPitch = 0.44, linkTimeoutMs = 10_000, linkMaxDistance = 24 } = {}
+) {
+  const root = new THREE.Group();
+  root.name = "constellation-root";
+  scene.add(root);
+
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const worldDir = new THREE.Vector3();
+  const skyCenter = new THREE.Vector3(0, 18, 0);
+  const skyRadius = 170;
+  const minAimDirY = Math.sin(minLookPitch);
+  const stars = [];
+  const links = [];
+  const starsById = new Map();
+  const linkPairs = new Set();
+  const starGeometry = new THREE.SphereGeometry(0.55, 10, 8);
+  const lineMaterial = new THREE.LineBasicMaterial({
+    color: 0x9bc8ff,
+    transparent: true,
+    opacity: 0.62,
+    depthWrite: false,
+  });
+  let lastPlaced = null;
+
+  function pointFromAngles(yaw, pitch) {
+    const cosPitch = Math.cos(pitch);
+    return new THREE.Vector3(
+      Math.sin(yaw) * cosPitch,
+      Math.sin(pitch),
+      -Math.cos(yaw) * cosPitch
+    )
+      .multiplyScalar(skyRadius)
+      .add(skyCenter);
+  }
+
+  function createStar(point, seeded = false, id = uid("star")) {
+    const safeId = String(id || uid("star"));
+    if (starsById.has(safeId)) return starsById.get(safeId);
+    const mat = new THREE.MeshBasicMaterial({
+      color: seeded ? 0xb7d8ff : 0xe7f4ff,
+      transparent: true,
+      opacity: seeded ? 0.8 : 0.96,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(starGeometry, mat);
+    mesh.position.copy(point);
+    mesh.renderOrder = 18;
+    root.add(mesh);
+    const star = {
+      id: safeId,
+      position: point.clone(),
+      mesh,
+      twinklePhase: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.45 + Math.random() * 0.65,
+      baseScale: seeded ? 0.9 : 1,
+      baseOpacity: seeded ? 0.8 : 0.96,
+      seeded: Boolean(seeded),
+    };
+    stars.push(star);
+    starsById.set(safeId, star);
+    return star;
+  }
+
+  function createLink(a, b) {
+    if (!a || !b || a.id === b.id) return;
+    const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+    if (linkPairs.has(key)) return;
+    linkPairs.add(key);
+    const geometry = new THREE.BufferGeometry().setFromPoints([a.position, b.position]);
+    const line = new THREE.Line(geometry, lineMaterial.clone());
+    line.material.opacity = 0.52 + Math.random() * 0.2;
+    line.renderOrder = 17;
+    root.add(line);
+    links.push({ line, a, b });
+  }
+
+  function seedDefaults() {
+    const seedAngles = [
+      { yaw: -0.56, pitch: 0.96 },
+      { yaw: -0.34, pitch: 1.04 },
+      { yaw: -0.08, pitch: 1.13 },
+      { yaw: 0.14, pitch: 1.05 },
+      { yaw: 0.38, pitch: 0.98 },
+      { yaw: 0.64, pitch: 1.08 },
+      { yaw: 0.86, pitch: 0.93 },
+    ];
+    for (let i = 0; i < seedAngles.length; i += 1) {
+      const item = seedAngles[i];
+      createStar(pointFromAngles(item.yaw, item.pitch), true, `seed_${i}`);
+    }
+    const linkPairs = [
+      [0, 1],
+      [1, 2],
+      [2, 3],
+      [3, 4],
+      [4, 5],
+      [2, 5],
+      [5, 6],
+    ];
+    for (const [a, b] of linkPairs) {
+      if (!stars[a] || !stars[b]) continue;
+      createLink(stars[a], stars[b]);
+    }
+  }
+
+  function clearAll() {
+    while (links.length) {
+      const item = links.pop();
+      linkPairs.delete(item.a.id < item.b.id ? `${item.a.id}|${item.b.id}` : `${item.b.id}|${item.a.id}`);
+      root.remove(item.line);
+      item.line.geometry?.dispose?.();
+      item.line.material?.dispose?.();
+    }
+    while (stars.length) {
+      const star = stars.pop();
+      starsById.delete(star.id);
+      root.remove(star.mesh);
+      star.mesh.geometry?.dispose?.();
+      star.mesh.material?.dispose?.();
+    }
+    lastPlaced = null;
+  }
+
+  function serialize() {
+    return {
+      stars: stars.map((item) => ({
+        id: item.id,
+        x: Number(item.position.x.toFixed(3)),
+        y: Number(item.position.y.toFixed(3)),
+        z: Number(item.position.z.toFixed(3)),
+        seeded: Boolean(item.seeded),
+      })),
+      links: links.map((item) => ({ a: item.a.id, b: item.b.id })),
+      updatedAt: Date.now(),
+    };
+  }
+
+  function loadShared(state, { replace = true } = {}) {
+    if (!state || typeof state !== "object") return;
+    const inStars = Array.isArray(state.stars) ? state.stars : [];
+    if (replace) clearAll();
+    for (const item of inStars) {
+      const id = String(item?.id || "");
+      if (!id) continue;
+      const x = Number(item?.x);
+      const y = Number(item?.y);
+      const z = Number(item?.z);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      createStar(new THREE.Vector3(x, y, z), Boolean(item?.seeded), id);
+    }
+    const inLinks = Array.isArray(state.links) ? state.links : [];
+    for (const item of inLinks) {
+      const a = starsById.get(String(item?.a || ""));
+      const b = starsById.get(String(item?.b || ""));
+      if (!a || !b) continue;
+      createLink(a, b);
+    }
+    lastPlaced = null;
+  }
+
+  function canAim(camera) {
+    if (!camera?.getWorldDirection) return false;
+    camera.getWorldDirection(worldDir).normalize();
+    return worldDir.y > minAimDirY;
+  }
+
+  function tryDropStar(clientX, clientY, domElement, camera) {
+    if (!canAim(camera)) return false;
+    const rect = domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return false;
+    const aimX = Number.isFinite(clientX) ? clientX : rect.left + rect.width * 0.5;
+    const aimY = Number.isFinite(clientY) ? clientY : rect.top + rect.height * 0.5;
+    ndc.x = ((aimX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((aimY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const dir = raycaster.ray.direction.clone().normalize();
+    // Keep placement strict enough to require looking upward, but avoid brittle gating.
+    if (dir.y <= 0.005) return false;
+
+    const point = skyCenter.clone().addScaledVector(dir, skyRadius);
+    const now = performance.now();
+    const next = createStar(point, false);
+    if (
+      lastPlaced &&
+      now - lastPlaced.time <= linkTimeoutMs &&
+      lastPlaced.position.distanceTo(point) <= linkMaxDistance
+    ) {
+      createLink(lastPlaced.star, next);
+    }
+    lastPlaced = { star: next, time: now, position: point.clone() };
+    return true;
+  }
+
+  function update(elapsedSeconds) {
+    const t = Number.isFinite(elapsedSeconds) ? elapsedSeconds : 0;
+    for (const star of stars) {
+      const wave = Math.sin(t * star.twinkleSpeed + star.twinklePhase) * 0.5 + 0.5;
+      const scale = star.baseScale + wave * 0.28;
+      star.mesh.scale.setScalar(scale);
+      star.mesh.material.opacity = Math.min(1, Math.max(0.35, star.baseOpacity + (wave - 0.5) * 0.3));
+    }
+    for (const item of links) {
+      const wave = Math.sin(t * 0.8 + item.a.twinklePhase + item.b.twinklePhase) * 0.5 + 0.5;
+      item.line.material.opacity = 0.35 + wave * 0.35;
+    }
+  }
+
+  seedDefaults();
+
+  return {
+    canAim,
+    tryDropStar,
+    update,
+    serialize,
+    loadShared,
+  };
+}
+
 function createRemoteAvatarRenderer(THREE, scene, masks) {
   const byId = new Map();
   const maskById = new Map(masks.map((mask) => [mask.id, mask]));
@@ -1557,6 +2003,29 @@ function createDecorControlsUI(root, input) {
         input.setVirtualKey("ArrowUp", false);
         input.setVirtualKey("ArrowDown", false);
       }
+    },
+  };
+}
+
+function createConstellationReticle(root) {
+  const dot = document.createElement("div");
+  dot.style.position = "absolute";
+  dot.style.left = "50%";
+  dot.style.top = "50%";
+  dot.style.width = "5px";
+  dot.style.height = "5px";
+  dot.style.marginLeft = "-2.5px";
+  dot.style.marginTop = "-2.5px";
+  dot.style.borderRadius = "999px";
+  dot.style.background = "rgba(232, 245, 255, 0.92)";
+  dot.style.boxShadow = "0 0 10px rgba(155, 200, 255, 0.75)";
+  dot.style.pointerEvents = "none";
+  dot.style.zIndex = "58";
+  dot.style.display = "none";
+  root.appendChild(dot);
+  return {
+    setVisible(next) {
+      dot.style.display = next ? "block" : "none";
     },
   };
 }

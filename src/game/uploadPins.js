@@ -6,6 +6,7 @@ const FILE_PIN_RADIUS = 6;
 const GRAFFITI_PIN_RADIUS = 8;
 const AUDIO_RADIUS_MULTIPLIER = 4;
 const FOLDER_PIN_RADIUS = 4;
+const FOLDER_STACK_ROTATION_SPEED = 0.045;
 const MEDIA_PREVIEW_ACTIVE_DISTANCE = 28;
 const MODEL_DEFAULT_COLOR = "#cad9f7";
 const AIM_RAYCAST_INTERVAL = 1 / 24;
@@ -1030,6 +1031,17 @@ function distance2D(a, b) {
   return Math.sqrt(dx * dx + dz * dz);
 }
 
+function decorLayerOffsetFromId(id) {
+  const raw = String(id || "");
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const normalized = (hash >>> 0) / 0xffffffff;
+  return normalized * 0.01;
+}
+
 function normalizeHexColor(value, fallback = MODEL_DEFAULT_COLOR) {
   const raw = String(value || "").trim().toLowerCase();
   if (/^#[0-9a-f]{6}$/.test(raw)) return raw;
@@ -1677,7 +1689,8 @@ export function createUploadPinManager({
         depthWrite: false,
       })
     );
-    const iconY = isModelPin ? modelBaseY : isDecoratePin ? 0.03 : isFolderPin ? 1.8 : 1.8;
+    const decorLayerOffset = isDecoratePin ? decorLayerOffsetFromId(data.id) : 0;
+    const iconY = isModelPin ? modelBaseY : isDecoratePin ? 0.03 + decorLayerOffset : isFolderPin ? 1.8 : 1.8;
     iconMesh.position.set(data.position.x, iconY, data.position.z);
     focusMesh.position.copy(iconMesh.position);
     shadowMesh.rotation.x = -Math.PI / 2;
@@ -1784,6 +1797,8 @@ export function createUploadPinManager({
       folderPanelShadowMeshes,
       folderPanelAngles,
       folderRingRadius,
+      folderSpinOffset: isFolderPin ? Math.random() * Math.PI * 2 : 0,
+      decorLayerOffset,
       folderEntries: Array.isArray(data.folderEntries)
         ? data.folderEntries.map((entry) => ({
             path: String(entry?.path || ""),
@@ -2239,11 +2254,11 @@ export function createUploadPinManager({
         if (pin.textureRef?.userData?.aspect && Math.abs(pin.textureRef.userData.aspect - pin.currentAspect) > 0.01) {
           setGroundImageGeometry(pin, pin.textureRef.userData.aspect);
         }
-        pin.iconMesh.position.set(pin.position.x, 0.03, pin.position.z);
+        pin.iconMesh.position.set(pin.position.x, 0.03 + (pin.decorLayerOffset || 0), pin.position.z);
         pin.iconMesh.rotation.x = -Math.PI / 2;
         pin.iconMesh.rotation.z = pin.rotationY || 0;
         pin.iconMesh.scale.set(pin.decorScale || 1, pin.decorScale || 1, 1);
-        pin.focusMesh.position.set(pin.position.x, 0.11, pin.position.z);
+        pin.focusMesh.position.set(pin.position.x, 0.11 + (pin.decorLayerOffset || 0), pin.position.z);
         pin.focusMesh.rotation.x = -Math.PI / 2;
         pin.focusMesh.rotation.z = pin.rotationY || 0;
       }
@@ -2254,10 +2269,11 @@ export function createUploadPinManager({
         pin.iconMesh.position.set(pin.position.x, 1.8, pin.position.z);
         if (Array.isArray(pin.folderPanelMeshes) && Array.isArray(pin.folderPanelAngles)) {
           const radius = Number(pin.folderRingRadius) || 1.24;
+          const spinAngle = elapsedTime * FOLDER_STACK_ROTATION_SPEED + (pin.folderSpinOffset || 0);
           for (let i = 0; i < pin.folderPanelMeshes.length; i += 1) {
             const panel = pin.folderPanelMeshes[i];
             const panelShadow = Array.isArray(pin.folderPanelShadowMeshes) ? pin.folderPanelShadowMeshes[i] : null;
-            const angle = pin.folderPanelAngles[i] || 0;
+            const angle = (pin.folderPanelAngles[i] || 0) + spinAngle;
             const outwardX = Math.cos(angle);
             const outwardZ = Math.sin(angle);
             const depthStagger = ((i % 3) - 1) * 0.04;
